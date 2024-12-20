@@ -23,6 +23,7 @@ services:
       - "/etc/localtime:/etc/localtime:ro"
       - "/etc/timezone:/etc/timezone:ro"
       - "/dev/*:/dev/*"
+      - ../../data:/home/rosdev/data:cached
     deploy:
       resources:
         reservations:
