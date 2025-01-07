@@ -1,5 +1,7 @@
 /**:
   ros__parameters:
+    # General
+    use_sim_time: true
 
     # Topics
     pointCloudTopic: "lidar_sonar_cloud"         # Point cloud data
