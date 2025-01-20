@@ -70,6 +70,7 @@ public:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubRecentKeyFrames;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubRecentKeyFrame;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloudRegisteredRaw;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubSonarPoints;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pubLoopConstraintEdge;
 
     rclcpp::Service<lio_sam::srv::SaveMap>::SharedPtr srvSaveMap;
@@ -82,6 +83,7 @@ public:
 
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
     vector<pcl::PointCloud<PointType>::Ptr> surfCloudKeyFrames;
+    vector<pcl::PointCloud<PointType>::Ptr> sonarCloudKeyFrames;
     
     pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;
     pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D;
@@ -92,6 +94,8 @@ public:
     pcl::PointCloud<PointType>::Ptr laserCloudSurfLast; // surf feature set from odoOptimization
     pcl::PointCloud<PointType>::Ptr laserCloudCornerLastDS; // downsampled corner feature set from odoOptimization
     pcl::PointCloud<PointType>::Ptr laserCloudSurfLastDS; // downsampled surf feature set from odoOptimization
+    pcl::PointCloud<PointType>::Ptr sonarCloudLast; // New point cloud for sonar points
+    pcl::PointCloud<PointType>::Ptr sonarCloudLastDS; // New point cloud for sonar points
 
     pcl::PointCloud<PointType>::Ptr laserCloudOri;
     pcl::PointCloud<PointType>::Ptr coeffSel;
@@ -108,6 +112,8 @@ public:
     pcl::PointCloud<PointType>::Ptr laserCloudSurfFromMap;
     pcl::PointCloud<PointType>::Ptr laserCloudCornerFromMapDS;
     pcl::PointCloud<PointType>::Ptr laserCloudSurfFromMapDS;
+    pcl::PointCloud<PointType>::Ptr sonarCloudFromMap;
+    pcl::PointCloud<PointType>::Ptr sonarCloudFromMapDS;
 
     pcl::KdTreeFLANN<PointType>::Ptr kdtreeCornerFromMap;
     pcl::KdTreeFLANN<PointType>::Ptr kdtreeSurfFromMap;
@@ -119,6 +125,7 @@ public:
     pcl::VoxelGrid<PointType> downSizeFilterSurf;
     pcl::VoxelGrid<PointType> downSizeFilterICP;
     pcl::VoxelGrid<PointType> downSizeFilterSurroundingKeyPoses; // for surrounding key poses of scan-to-map optimization
+    pcl::VoxelGrid<PointType> downSizeFilterSonar; // New voxel grid filter for sonar points
 
     rclcpp::Time timeLaserInfoStamp;
     double timeLaserInfoCur;
@@ -133,8 +140,10 @@ public:
 
     int laserCloudCornerFromMapDSNum = 0;
     int laserCloudSurfFromMapDSNum = 0;
+    int sonarCloudFromMapDSNum = 0;
     int laserCloudCornerLastDSNum = 0;
     int laserCloudSurfLastDSNum = 0;
+    int sonarCloudLastDSNum = 0;
 
     bool aLoopIsClosed = false;
     map<int, int> loopIndexContainer; // from new to old
@@ -163,6 +172,7 @@ public:
         pubLaserOdometryGlobal = create_publisher<nav_msgs::msg::Odometry>("lio_sam/mapping/odometry", qos);
         pubLaserOdometryIncremental = create_publisher<nav_msgs::msg::Odometry>(
             "lio_sam/mapping/odometry_incremental", qos);
+        pubSonarPoints = create_publisher<sensor_msgs::msg::PointCloud2>("lio_sam/mapping/sonar", 1); // New publisher for sonar points
         pubPath = create_publisher<nav_msgs::msg::Path>("lio_sam/mapping/path", 1);
         br = std::make_unique<tf2_ros::TransformBroadcaster>(this);
 
@@ -195,41 +205,52 @@ public:
             pcl::PointCloud<PointType>::Ptr globalCornerCloudDS(new pcl::PointCloud<PointType>());
             pcl::PointCloud<PointType>::Ptr globalSurfCloud(new pcl::PointCloud<PointType>());
             pcl::PointCloud<PointType>::Ptr globalSurfCloudDS(new pcl::PointCloud<PointType>());
+            pcl::PointCloud<PointType>::Ptr globalSonarCloud(new pcl::PointCloud<PointType>());            
             pcl::PointCloud<PointType>::Ptr globalMapCloud(new pcl::PointCloud<PointType>());
             for (int i = 0; i < (int)cloudKeyPoses3D->size(); i++) 
             {
                 *globalCornerCloud += *transformPointCloud(cornerCloudKeyFrames[i],  &cloudKeyPoses6D->points[i]);
                 *globalSurfCloud   += *transformPointCloud(surfCloudKeyFrames[i],    &cloudKeyPoses6D->points[i]);
+                *globalSonarCloud  += *transformPointCloud(sonarCloudKeyFrames[i],  &cloudKeyPoses6D->points[i]); // Accumulate sonar points
                 cout << "\r" << std::flush << "Processing feature cloud " << i << " of " << cloudKeyPoses6D->size() << " ...";
             }
             if(req->resolution != 0)
             {
-               cout << "\n\nSave resolution: " << req->resolution << endl;
-               // down-sample and save corner cloud
-               downSizeFilterCorner.setInputCloud(globalCornerCloud);
-               downSizeFilterCorner.setLeafSize(req->resolution, req->resolution, req->resolution);
-               downSizeFilterCorner.filter(*globalCornerCloudDS);
-               pcl::io::savePCDFileBinary(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloudDS);
-               // down-sample and save surf cloud
-               downSizeFilterSurf.setInputCloud(globalSurfCloud);
-               downSizeFilterSurf.setLeafSize(req->resolution, req->resolution, req->resolution);
-               downSizeFilterSurf.filter(*globalSurfCloudDS);
-               pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloudDS);
+            cout << "\n\nSave resolution: " << req->resolution << endl;
+            // down-sample and save corner cloud
+            downSizeFilterCorner.setInputCloud(globalCornerCloud);
+            downSizeFilterCorner.setLeafSize(req->resolution, req->resolution, req->resolution);
+            downSizeFilterCorner.filter(*globalCornerCloudDS);
+            pcl::io::savePCDFileBinary(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloudDS);
+            // down-sample and save surf cloud
+            downSizeFilterSurf.setInputCloud(globalSurfCloud);
+            downSizeFilterSurf.setLeafSize(req->resolution, req->resolution, req->resolution);
+            downSizeFilterSurf.filter(*globalSurfCloudDS);
+            pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloudDS);
+            // down-sample and save sonar cloud
+            downSizeFilterSonar.setInputCloud(globalSonarCloud);
+            downSizeFilterSonar.setLeafSize(req->resolution, req->resolution, req->resolution);
+            downSizeFilterSonar.filter(*globalSonarCloud);
+            pcl::io::savePCDFileBinary(saveMapDirectory + "/SonarMap.pcd", *globalSonarCloud);
             }
             else
             {
             // save corner cloud
-               pcl::io::savePCDFileBinary(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloud);
-               // save surf cloud
-               pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloud);
+            pcl::io::savePCDFileBinary(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloud);
+            // save surf cloud
+            pcl::io::savePCDFileBinary(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloud);
+            // save sonar cloud
+            pcl::io::savePCDFileBinary(saveMapDirectory + "/SonarMap.pcd", *globalSonarCloud);
             }
             // save global point cloud map
             *globalMapCloud += *globalCornerCloud;
             *globalMapCloud += *globalSurfCloud;
+            *globalMapCloud += *globalSonarCloud;
             int ret = pcl::io::savePCDFileBinary(saveMapDirectory + "/GlobalMap.pcd", *globalMapCloud);
             res->success = ret == 0;
             downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
             downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
+            downSizeFilterSonar.setLeafSize(0.1, 0.1, 0.1); // Reset the voxel grid filter
             cout << "****************************************************" << endl;
             cout << "Saving map to pcd files completed\n" << endl;
             return;
@@ -248,6 +269,7 @@ public:
         downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
         downSizeFilterICP.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
         downSizeFilterSurroundingKeyPoses.setLeafSize(surroundingKeyframeDensity, surroundingKeyframeDensity, surroundingKeyframeDensity); // for surrounding key poses of scan-to-map optimization
+        downSizeFilterSonar.setLeafSize(0.1, 0.1, 0.1); // Initialize the new voxel grid filter
 
         allocateMemory();
     }
@@ -264,18 +286,20 @@ public:
 
         laserCloudCornerLast.reset(new pcl::PointCloud<PointType>()); // corner feature set from odoOptimization
         laserCloudSurfLast.reset(new pcl::PointCloud<PointType>()); // surf feature set from odoOptimization
+        sonarCloudLast.reset(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
         laserCloudCornerLastDS.reset(new pcl::PointCloud<PointType>()); // downsampled corner featuer set from odoOptimization
         laserCloudSurfLastDS.reset(new pcl::PointCloud<PointType>()); // downsampled surf featuer set from odoOptimization
+        sonarCloudLastDS.reset(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
 
         laserCloudOri.reset(new pcl::PointCloud<PointType>());
         coeffSel.reset(new pcl::PointCloud<PointType>());
 
-        laserCloudOriCornerVec.resize(N_SCAN * Horizon_SCAN);
-        coeffSelCornerVec.resize(N_SCAN * Horizon_SCAN);
-        laserCloudOriCornerFlag.resize(N_SCAN * Horizon_SCAN);
-        laserCloudOriSurfVec.resize(N_SCAN * Horizon_SCAN);
-        coeffSelSurfVec.resize(N_SCAN * Horizon_SCAN);
-        laserCloudOriSurfFlag.resize(N_SCAN * Horizon_SCAN);
+        laserCloudOriCornerVec.resize(128 * Horizon_SCAN);
+        coeffSelCornerVec.resize(128 * Horizon_SCAN);
+        laserCloudOriCornerFlag.resize(128 * Horizon_SCAN);
+        laserCloudOriSurfVec.resize(128 * Horizon_SCAN);
+        coeffSelSurfVec.resize(128 * Horizon_SCAN);
+        laserCloudOriSurfFlag.resize(128 * Horizon_SCAN);
 
         std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), false);
         std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), false);
@@ -284,6 +308,8 @@ public:
         laserCloudSurfFromMap.reset(new pcl::PointCloud<PointType>());
         laserCloudCornerFromMapDS.reset(new pcl::PointCloud<PointType>());
         laserCloudSurfFromMapDS.reset(new pcl::PointCloud<PointType>());
+        sonarCloudFromMap.reset(new pcl::PointCloud<PointType>());
+        sonarCloudFromMapDS.reset(new pcl::PointCloud<PointType>());
 
         kdtreeCornerFromMap.reset(new pcl::KdTreeFLANN<PointType>());
         kdtreeSurfFromMap.reset(new pcl::KdTreeFLANN<PointType>());
@@ -305,6 +331,7 @@ public:
         cloudInfo = *msgIn;
         pcl::fromROSMsg(msgIn->cloud_corner,  *laserCloudCornerLast);
         pcl::fromROSMsg(msgIn->cloud_surface, *laserCloudSurfLast);
+        pcl::fromROSMsg(msgIn->cloud_sonar,  *sonarCloudLast); // Extract the new point cloud for sonar points
 
         std::lock_guard<std::mutex> lock(mtx);
 
@@ -426,10 +453,12 @@ public:
         pcl::PointCloud<PointType>::Ptr globalSurfCloud(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr globalSurfCloudDS(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr globalMapCloud(new pcl::PointCloud<PointType>());
+        pcl::PointCloud<PointType>::Ptr globalSonarCloud(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
         
         for (int i = 0; i < (int)cloudKeyPoses3D->size(); i++) {
             *globalCornerCloud += *transformPointCloud(cornerCloudKeyFrames[i],  &cloudKeyPoses6D->points[i]);
             *globalSurfCloud   += *transformPointCloud(surfCloudKeyFrames[i],    &cloudKeyPoses6D->points[i]);
+            *globalSonarCloud  += *transformPointCloud(sonarCloudKeyFrames[i],  &cloudKeyPoses6D->points[i]); // Add sonar points to the global map
             cout << "\r" << std::flush << "Processing feature cloud " << i << " of " << cloudKeyPoses6D->size() << " ...";
         }
         
@@ -441,8 +470,13 @@ public:
         downSizeFilterSurf.filter(*globalSurfCloudDS);
         pcl::io::savePCDFileASCII(savePCDDirectory + "cloudSurf.pcd", *globalSurfCloudDS);
         
+        downSizeFilterSonar.setInputCloud(globalSonarCloud);
+        downSizeFilterSonar.filter(*globalSonarCloud);
+        pcl::io::savePCDFileASCII(savePCDDirectory + "cloudSonar.pcd", *globalSonarCloud);
+
         *globalMapCloud += *globalCornerCloud;
         *globalMapCloud += *globalSurfCloud;
+        *globalMapCloud += *globalSonarCloud;
         pcl::io::savePCDFileASCII(savePCDDirectory + "cloudGlobal.pcd", *globalMapCloud);
         
         cout << "The files are saved to " << savePCDDirectory << endl;
@@ -498,6 +532,7 @@ public:
             int thisKeyInd = (int)globalMapKeyPosesDS->points[i].intensity;
             *globalMapKeyFrames += *transformPointCloud(cornerCloudKeyFrames[thisKeyInd],  &cloudKeyPoses6D->points[thisKeyInd]);
             *globalMapKeyFrames += *transformPointCloud(surfCloudKeyFrames[thisKeyInd],    &cloudKeyPoses6D->points[thisKeyInd]);
+            *globalMapKeyFrames += *transformPointCloud(sonarCloudKeyFrames[thisKeyInd],  &cloudKeyPoses6D->points[thisKeyInd]); // Add sonar points to the global map
         }
         // downsample visualized points
         pcl::VoxelGrid<PointType> downSizeFilterGlobalMapKeyFrames; // for global map visualization
@@ -506,16 +541,6 @@ public:
         downSizeFilterGlobalMapKeyFrames.filter(*globalMapKeyFramesDS);
         publishCloud(pubLaserCloudSurround, globalMapKeyFramesDS, timeLaserInfoStamp, odometryFrame);
     }
-
-
-
-
-
-
-
-
-
-
 
 
     void loopClosureThread()
@@ -792,15 +817,6 @@ public:
     }
 
 
-
-
-
-
-
-    
-
-
-
     void updateInitialGuess()
     {
         // save current transformation before any processing
@@ -920,6 +936,8 @@ public:
         // fuse the map
         laserCloudCornerFromMap->clear();
         laserCloudSurfFromMap->clear(); 
+        sonarCloudFromMap->clear(); // Clear the sonar cloud
+
         for (int i = 0; i < (int)cloudToExtract->size(); ++i)
         {
             if (pointDistance(cloudToExtract->points[i], cloudKeyPoses3D->back()) > surroundingKeyframeSearchRadius)
@@ -935,11 +953,12 @@ public:
                 // transformed cloud not available
                 pcl::PointCloud<PointType> laserCloudCornerTemp = *transformPointCloud(cornerCloudKeyFrames[thisKeyInd],  &cloudKeyPoses6D->points[thisKeyInd]);
                 pcl::PointCloud<PointType> laserCloudSurfTemp = *transformPointCloud(surfCloudKeyFrames[thisKeyInd],    &cloudKeyPoses6D->points[thisKeyInd]);
+                pcl::PointCloud<PointType> sonarCloudSurfTemp = *transformPointCloud(sonarCloudKeyFrames[thisKeyInd], &cloudKeyPoses6D->points[thisKeyInd]); // Transform and accumulate sonar points
                 *laserCloudCornerFromMap += laserCloudCornerTemp;
                 *laserCloudSurfFromMap   += laserCloudSurfTemp;
+                *sonarCloudFromMap       += sonarCloudSurfTemp; // Add sonar points to the map
                 laserCloudMapContainer[thisKeyInd] = make_pair(laserCloudCornerTemp, laserCloudSurfTemp);
             }
-            
         }
 
         // Downsample the surrounding corner key frames (or map)
@@ -950,7 +969,10 @@ public:
         downSizeFilterSurf.setInputCloud(laserCloudSurfFromMap);
         downSizeFilterSurf.filter(*laserCloudSurfFromMapDS);
         laserCloudSurfFromMapDSNum = laserCloudSurfFromMapDS->size();
-
+        // Downsample the surrounding sonar key frames (or map)
+        downSizeFilterSonar.setInputCloud(sonarCloudFromMap);
+        downSizeFilterSonar.filter(*sonarCloudFromMapDS);
+        sonarCloudFromMapDSNum = sonarCloudFromMapDS->size();
         // clear map cache if too large
         if (laserCloudMapContainer.size() > 1000)
             laserCloudMapContainer.clear();
@@ -983,6 +1005,12 @@ public:
         downSizeFilterSurf.setInputCloud(laserCloudSurfLast);
         downSizeFilterSurf.filter(*laserCloudSurfLastDS);
         laserCloudSurfLastDSNum = laserCloudSurfLastDS->size();
+
+        // Downsample sonar cloud from current scan
+        sonarCloudLastDS->clear();
+        downSizeFilterSonar.setInputCloud(sonarCloudLast);
+        downSizeFilterSonar.filter(*sonarCloudLastDS);
+        sonarCloudLastDSNum = sonarCloudLastDS->size();
     }
 
     void updatePointAssociateToMap()
@@ -1588,13 +1616,16 @@ public:
         // save all the received edge and surf points
         pcl::PointCloud<PointType>::Ptr thisCornerKeyFrame(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr thisSurfKeyFrame(new pcl::PointCloud<PointType>());
+        pcl::PointCloud<PointType>::Ptr thisSonarKeyFrame(new pcl::PointCloud<PointType>());
         pcl::copyPointCloud(*laserCloudCornerLastDS,  *thisCornerKeyFrame);
         pcl::copyPointCloud(*laserCloudSurfLastDS,    *thisSurfKeyFrame);
+        pcl::copyPointCloud(*sonarCloudLastDS,          *thisSonarKeyFrame);
 
         // save key frame cloud
         cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
         surfCloudKeyFrames.push_back(thisSurfKeyFrame);
-
+        sonarCloudKeyFrames.push_back(thisSonarKeyFrame);
+        
         // save path for visualization
         updatePath(thisPose6D);
     }
@@ -1757,6 +1788,14 @@ public:
             PointTypePose thisPose6D = trans2PointTypePose(transformTobeMapped);
             *cloudOut = *transformPointCloud(cloudOut,  &thisPose6D);
             publishCloud(pubCloudRegisteredRaw, cloudOut, timeLaserInfoStamp, odometryFrame);
+        }
+        // publish accumulated sonar points
+        if (pubSonarPoints->get_subscription_count() != 0)
+        {
+            pcl::PointCloud<PointType>::Ptr sonarCloudTransformed(new pcl::PointCloud<PointType>());
+            PointTypePose thisPose6D = trans2PointTypePose(transformTobeMapped);
+            *sonarCloudTransformed = *transformPointCloud(sonarCloudFromMapDS, &thisPose6D);
+            publishCloud(pubSonarPoints, sonarCloudTransformed, timeLaserInfoStamp, odometryFrame);
         }
         // publish path
         if (pubPath->get_subscription_count() != 0)

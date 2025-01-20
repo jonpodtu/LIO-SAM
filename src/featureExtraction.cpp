@@ -22,12 +22,15 @@ public:
     rclcpp::Publisher<lio_sam::msg::CloudInfo>::SharedPtr pubLaserCloudInfo;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCornerPoints;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubSurfacePoints;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubSonarPoints; // New publisher for sonar points
 
     pcl::PointCloud<PointType>::Ptr extractedCloud;
     pcl::PointCloud<PointType>::Ptr cornerCloud;
     pcl::PointCloud<PointType>::Ptr surfaceCloud;
+    pcl::PointCloud<PointType>::Ptr sonarCloud; // New point cloud for sonar points
 
     pcl::VoxelGrid<PointType> downSizeFilter;
+    pcl::VoxelGrid<PointType> downSizeFilterSonar; // New voxel grid filter for sonar points
 
     lio_sam::msg::CloudInfo cloudInfo;
     std_msgs::msg::Header cloudHeader;
@@ -50,7 +53,8 @@ public:
             "lio_sam/feature/cloud_corner", 1);
         pubSurfacePoints = create_publisher<sensor_msgs::msg::PointCloud2>(
             "lio_sam/feature/cloud_surface", 1);
-
+        pubSonarPoints = create_publisher<sensor_msgs::msg::PointCloud2>( // Initialize the new publisher
+            "lio_sam/feature/cloud_sonar", 1);
         initializationValue();
     }
 
@@ -59,10 +63,12 @@ public:
         cloudSmoothness.resize(N_SCAN*Horizon_SCAN);
 
         downSizeFilter.setLeafSize(odometrySurfLeafSize, odometrySurfLeafSize, odometrySurfLeafSize);
+        downSizeFilterSonar.setLeafSize(0.1, 0.1, 0.1); // Initialize the new voxel grid filter
 
         extractedCloud.reset(new pcl::PointCloud<PointType>());
         cornerCloud.reset(new pcl::PointCloud<PointType>());
         surfaceCloud.reset(new pcl::PointCloud<PointType>());
+        sonarCloud.reset(new pcl::PointCloud<PointType>()); // Initialize the new point cloud
 
         cloudCurvature = new float[N_SCAN*Horizon_SCAN];
         cloudNeighborPicked = new int[N_SCAN*Horizon_SCAN];
@@ -147,11 +153,14 @@ public:
     {
         cornerCloud->clear();
         surfaceCloud->clear();
+        sonarCloud->clear(); // Clear the sonar cloud
 
         pcl::PointCloud<PointType>::Ptr surfaceCloudScan(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr surfaceCloudScanDS(new pcl::PointCloud<PointType>());
+        pcl::PointCloud<PointType>::Ptr sonarCloudScan(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
+        pcl::PointCloud<PointType>::Ptr sonarCloudScanDS(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
 
-        for (int i = 0; i < N_SCAN; i++)
+        for (int i = 0; i < 128; i++)
         {
             surfaceCloudScan->clear();
 
@@ -238,6 +247,24 @@ public:
 
             *surfaceCloud += *surfaceCloudScanDS;
         }
+
+        // Extract sonar points
+        // Since these are not LiDAR points, different downsampling filter and feature extraction (none since it
+        // is done before) are used. We will make this separate from the surface points so we can toggle between
+        // using them or not when mapping.
+        for (int i = 128; i < N_SCAN; i++)
+        {
+            sonarCloudScan->clear();
+            for (int j = cloudInfo.start_ring_index[i]; j <= cloudInfo.end_ring_index[i]; j++)
+            {
+                sonarCloudScan->push_back(extractedCloud->points[j]);
+            }
+            sonarCloudScanDS->clear();
+            downSizeFilterSonar.setInputCloud(sonarCloudScan);
+            downSizeFilterSonar.filter(*sonarCloudScanDS);
+
+            *sonarCloud += *sonarCloudScanDS;
+        }
     }
 
     void freeCloudInfoMemory()
@@ -255,6 +282,7 @@ public:
         // save newly extracted features
         cloudInfo.cloud_corner = publishCloud(pubCornerPoints,  cornerCloud,  cloudHeader.stamp, lidarFrame);
         cloudInfo.cloud_surface = publishCloud(pubSurfacePoints, surfaceCloud, cloudHeader.stamp, lidarFrame);
+        cloudInfo.cloud_sonar = publishCloud(pubSonarPoints, sonarCloud, cloudHeader.stamp, lidarFrame); // Publish sonar points
         // publish to mapOptimization
         pubLaserCloudInfo->publish(cloudInfo);
     }

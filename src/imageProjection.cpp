@@ -583,7 +583,7 @@ public:
             if (rowIdn < 0 || rowIdn >= N_SCAN)
                 continue;
 
-            if (rowIdn % downsampleRate != 0)
+            if (rowIdn < 128 && rowIdn % downsampleRate != 0)
                 continue;
 
             int columnIdn = -1;
@@ -608,8 +608,11 @@ public:
             if (rangeMat.at<float>(rowIdn, columnIdn) != FLT_MAX)
                 continue;
 
-            thisPoint = deskewPoint(&thisPoint, laserCloudIn->points[i].time);
-
+            // Row 128 and above is sonar data, which is not deskewed
+            if (rowIdn < 128) {
+                thisPoint = deskewPoint(&thisPoint, laserCloudIn->points[i].time);
+            }
+            
             rangeMat.at<float>(rowIdn, columnIdn) = range;
 
             int index = columnIdn + rowIdn * Horizon_SCAN;
