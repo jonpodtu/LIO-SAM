@@ -60,19 +60,19 @@ public:
 
     void initializationValue()
     {
-        cloudSmoothness.resize(N_SCAN*Horizon_SCAN);
+        cloudSmoothness.resize(LIDAR_N_SCAN*Horizon_SCAN);
 
         downSizeFilter.setLeafSize(odometrySurfLeafSize, odometrySurfLeafSize, odometrySurfLeafSize);
-        downSizeFilterSonar.setLeafSize(0.1, 0.1, 0.1); // Initialize the new voxel grid filter
+        downSizeFilterSonar.setLeafSize(sonarCloudLeafSize, sonarCloudLeafSize, sonarCloudLeafSize); // Initialize the new voxel grid filter
 
         extractedCloud.reset(new pcl::PointCloud<PointType>());
         cornerCloud.reset(new pcl::PointCloud<PointType>());
         surfaceCloud.reset(new pcl::PointCloud<PointType>());
         sonarCloud.reset(new pcl::PointCloud<PointType>()); // Initialize the new point cloud
 
-        cloudCurvature = new float[N_SCAN*Horizon_SCAN];
-        cloudNeighborPicked = new int[N_SCAN*Horizon_SCAN];
-        cloudLabel = new int[N_SCAN*Horizon_SCAN];
+        cloudCurvature = new float[LIDAR_N_SCAN*Horizon_SCAN];
+        cloudNeighborPicked = new int[LIDAR_N_SCAN*Horizon_SCAN];
+        cloudLabel = new int[LIDAR_N_SCAN*Horizon_SCAN];
     }
 
     void laserCloudInfoHandler(const lio_sam::msg::CloudInfo::SharedPtr msgIn)
@@ -160,7 +160,7 @@ public:
         pcl::PointCloud<PointType>::Ptr sonarCloudScan(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
         pcl::PointCloud<PointType>::Ptr sonarCloudScanDS(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
 
-        for (int i = 0; i < 128; i++)
+        for (int i = 0; i < LIDAR_N_SCAN; i++)
         {
             surfaceCloudScan->clear();
 
@@ -252,7 +252,7 @@ public:
         // Since these are not LiDAR points, different downsampling filter and feature extraction (none since it
         // is done before) are used. We will make this separate from the surface points so we can toggle between
         // using them or not when mapping.
-        for (int i = 128; i < N_SCAN; i++)
+        for (int i = LIDAR_N_SCAN; i < N_SCAN; i++)
         {
             sonarCloudScan->clear();
             for (int j = cloudInfo.start_ring_index[i]; j <= cloudInfo.end_ring_index[i]; j++)

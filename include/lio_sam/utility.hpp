@@ -94,6 +94,7 @@ public:
     // Lidar Sensor Configuration
     SensorType sensor = SensorType::OUSTER;
     int N_SCAN;
+    int LIDAR_N_SCAN;
     int Horizon_SCAN;
     int downsampleRate;
     float lidarMinRange;
@@ -123,7 +124,8 @@ public:
     // voxel filter paprams
     float odometrySurfLeafSize;
     float mappingCornerLeafSize;
-    float mappingSurfLeafSize ;
+    float mappingSurfLeafSize;
+    float sonarCloudLeafSize;
 
     float z_tollerance;
     float rotation_tollerance;
@@ -209,8 +211,10 @@ public:
             rclcpp::shutdown();
         }
 
-        declare_parameter("N_SCAN", 64);
+        declare_parameter("N_SCAN", 144);
         get_parameter("N_SCAN", N_SCAN);
+        declare_parameter("LIDAR_N_SCAN", 128);
+        get_parameter("LIDAR_N_SCAN", LIDAR_N_SCAN);
         declare_parameter("Horizon_SCAN", 512);
         get_parameter("Horizon_SCAN", Horizon_SCAN);
         declare_parameter("downsampleRate", 1);
@@ -266,6 +270,8 @@ public:
         get_parameter("mappingCornerLeafSize", mappingCornerLeafSize);
         declare_parameter("mappingSurfLeafSize", 0.4);
         get_parameter("mappingSurfLeafSize", mappingSurfLeafSize);
+        declare_parameter("sonarCloudLeafSize", 0.1);
+        get_parameter("sonarCloudLeafSize", sonarCloudLeafSize);
 
         declare_parameter("z_tollerance", 1000.0);
         get_parameter("z_tollerance", z_tollerance);

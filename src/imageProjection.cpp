@@ -583,7 +583,7 @@ public:
             if (rowIdn < 0 || rowIdn >= N_SCAN)
                 continue;
 
-            if (rowIdn < 128 && rowIdn % downsampleRate != 0)
+            if (rowIdn < LIDAR_N_SCAN && rowIdn % downsampleRate != 0)
                 continue;
 
             int columnIdn = -1;
@@ -609,7 +609,7 @@ public:
                 continue;
 
             // Row 128 and above is sonar data, which is not deskewed
-            if (rowIdn < 128) {
+            if (rowIdn < LIDAR_N_SCAN) {
                 thisPoint = deskewPoint(&thisPoint, laserCloudIn->points[i].time);
             }
             

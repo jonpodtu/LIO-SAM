@@ -23,13 +23,14 @@
 
     # Export settings
     savePCD: true                               # https://github.com/TixiaoShan/LIO-SAM/issues/3
-    savePCDDirectory: "/home/liosamuser/LOAM/"                   # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
+    savePCDDirectory: "/home/liosamuser/LOAM/"  # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
 
     # Sensor Settings
     sensor: ouster                               # lidar sensor type, either 'velodyne', 'ouster' or 'livox'
-    N_SCAN: 170                                 # Number of scan ring to take into scan registration
-    Horizon_SCAN: 1024                            # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
-    downsampleRate: 2                            # default: 1. Downsample your data if too many
+    LIDAR_N_SCAN: 128                            # The number of scan rings for the LiDAR. Everything between this and N_SCAN is assumed to be other data.
+    N_SCAN: 144                                  # Number of scan ring to take into scan registration
+    Horizon_SCAN: 1024                           # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
+    downsampleRate: 2                            # default: 1. Downsample your data if too many. Only applied on LIDAR data (Up to ring LIDAR_N_SCAN)
     # points. i.e., 16 = 64 / 4, 16 = 16 / 1
     lidarMinRange: 1.0                           # default: 1.0, minimum lidar range to be used
     lidarMaxRange: 1000.0                        # default: 1000.0, maximum lidar range to be used
@@ -62,6 +63,7 @@
     odometrySurfLeafSize: 0.4                     # default: 0.4 - outdoor, 0.2 - indoor
     mappingCornerLeafSize: 0.2                    # default: 0.2 - outdoor, 0.1 - indoor
     mappingSurfLeafSize: 0.4                      # default: 0.4 - outdoor, 0.2 - indoor
+    sonarCloudLeafSize: 0.1                       # The lower, the more dense the point cloud
 
     # robot motion constraint (in case you are using a 2D robot)
     z_tollerance: 1000.0                          # meters

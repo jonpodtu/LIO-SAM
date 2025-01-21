@@ -191,12 +191,12 @@ public:
             string saveMapDirectory;
             cout << "****************************************************" << endl;
             cout << "Saving map to pcd files ..." << endl;
-            if(req->destination.empty()) saveMapDirectory = std::getenv("HOME") + savePCDDirectory;
-            else saveMapDirectory = std::getenv("HOME") + req->destination;
-            cout << "Save destination: " << saveMapDirectory << endl;
-            // create directory and remove old files;
-            int unused = system((std::string("exec rm -r ") + saveMapDirectory).c_str());
-            unused = system((std::string("mkdir -p ") + saveMapDirectory).c_str());
+            // Add the current time to the directory name and make directory with that time
+            std::time_t now = std::time(NULL);
+            char timestamp[20];
+            std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", std::localtime(&now));
+            savePCDDirectory = savePCDDirectory + "/" + std::string(timestamp) + "/";
+            int unused = system((std::string("mkdir -p ") + savePCDDirectory).c_str());
             // save key frame transformations
             pcl::io::savePCDFileBinary(saveMapDirectory + "/trajectory.pcd", *cloudKeyPoses3D);
             pcl::io::savePCDFileBinary(saveMapDirectory + "/transformations.pcd", *cloudKeyPoses6D);
@@ -250,7 +250,7 @@ public:
             res->success = ret == 0;
             downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
             downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
-            downSizeFilterSonar.setLeafSize(0.1, 0.1, 0.1); // Reset the voxel grid filter
+            downSizeFilterSonar.setLeafSize(sonarCloudLeafSize, sonarCloudLeafSize, sonarCloudLeafSize); // Reset the voxel grid filter
             cout << "****************************************************" << endl;
             cout << "Saving map to pcd files completed\n" << endl;
             return;
@@ -269,7 +269,7 @@ public:
         downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
         downSizeFilterICP.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
         downSizeFilterSurroundingKeyPoses.setLeafSize(surroundingKeyframeDensity, surroundingKeyframeDensity, surroundingKeyframeDensity); // for surrounding key poses of scan-to-map optimization
-        downSizeFilterSonar.setLeafSize(0.1, 0.1, 0.1); // Initialize the new voxel grid filter
+        downSizeFilterSonar.setLeafSize(sonarCloudLeafSize, sonarCloudLeafSize, sonarCloudLeafSize); // Initialize the new voxel grid filter
 
         allocateMemory();
     }
@@ -294,12 +294,12 @@ public:
         laserCloudOri.reset(new pcl::PointCloud<PointType>());
         coeffSel.reset(new pcl::PointCloud<PointType>());
 
-        laserCloudOriCornerVec.resize(128 * Horizon_SCAN);
-        coeffSelCornerVec.resize(128 * Horizon_SCAN);
-        laserCloudOriCornerFlag.resize(128 * Horizon_SCAN);
-        laserCloudOriSurfVec.resize(128 * Horizon_SCAN);
-        coeffSelSurfVec.resize(128 * Horizon_SCAN);
-        laserCloudOriSurfFlag.resize(128 * Horizon_SCAN);
+        laserCloudOriCornerVec.resize(LIDAR_N_SCAN * Horizon_SCAN);
+        coeffSelCornerVec.resize(LIDAR_N_SCAN * Horizon_SCAN);
+        laserCloudOriCornerFlag.resize(LIDAR_N_SCAN * Horizon_SCAN);
+        laserCloudOriSurfVec.resize(LIDAR_N_SCAN * Horizon_SCAN);
+        coeffSelSurfVec.resize(LIDAR_N_SCAN * Horizon_SCAN);
+        laserCloudOriSurfFlag.resize(LIDAR_N_SCAN * Horizon_SCAN);
 
         std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), false);
         std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), false);
@@ -502,6 +502,7 @@ public:
         pcl::PointCloud<PointType>::Ptr globalMapKeyPosesDS(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr globalMapKeyFrames(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr globalMapKeyFramesDS(new pcl::PointCloud<PointType>());
+        pcl::PointCloud<PointType>::Ptr globalMapKeySonar(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
 
         // kd-tree to find near key frames to visualize
         std::vector<int> pointSearchIndGlobalMap;
@@ -514,6 +515,7 @@ public:
 
         for (int i = 0; i < (int)pointSearchIndGlobalMap.size(); ++i)
             globalMapKeyPoses->push_back(cloudKeyPoses3D->points[pointSearchIndGlobalMap[i]]);
+            
         // downsample near selected key frames
         pcl::VoxelGrid<PointType> downSizeFilterGlobalMapKeyPoses; // for global map visualization
         downSizeFilterGlobalMapKeyPoses.setLeafSize(globalMapVisualizationPoseDensity, globalMapVisualizationPoseDensity, globalMapVisualizationPoseDensity); // for global map visualization
@@ -532,7 +534,7 @@ public:
             int thisKeyInd = (int)globalMapKeyPosesDS->points[i].intensity;
             *globalMapKeyFrames += *transformPointCloud(cornerCloudKeyFrames[thisKeyInd],  &cloudKeyPoses6D->points[thisKeyInd]);
             *globalMapKeyFrames += *transformPointCloud(surfCloudKeyFrames[thisKeyInd],    &cloudKeyPoses6D->points[thisKeyInd]);
-            *globalMapKeyFrames += *transformPointCloud(sonarCloudKeyFrames[thisKeyInd],  &cloudKeyPoses6D->points[thisKeyInd]); // Add sonar points to the global map
+            *globalMapKeySonar  += *transformPointCloud(sonarCloudKeyFrames[thisKeyInd],  &cloudKeyPoses6D->points[thisKeyInd]); // Add sonar points to the global map
         }
         // downsample visualized points
         pcl::VoxelGrid<PointType> downSizeFilterGlobalMapKeyFrames; // for global map visualization
@@ -540,6 +542,7 @@ public:
         downSizeFilterGlobalMapKeyFrames.setInputCloud(globalMapKeyFrames);
         downSizeFilterGlobalMapKeyFrames.filter(*globalMapKeyFramesDS);
         publishCloud(pubLaserCloudSurround, globalMapKeyFramesDS, timeLaserInfoStamp, odometryFrame);
+        publishCloud(pubSonarPoints, globalMapKeySonar, timeLaserInfoStamp, odometryFrame); // Publish the sonar points
     }
 
 
@@ -1788,14 +1791,6 @@ public:
             PointTypePose thisPose6D = trans2PointTypePose(transformTobeMapped);
             *cloudOut = *transformPointCloud(cloudOut,  &thisPose6D);
             publishCloud(pubCloudRegisteredRaw, cloudOut, timeLaserInfoStamp, odometryFrame);
-        }
-        // publish accumulated sonar points
-        if (pubSonarPoints->get_subscription_count() != 0)
-        {
-            pcl::PointCloud<PointType>::Ptr sonarCloudTransformed(new pcl::PointCloud<PointType>());
-            PointTypePose thisPose6D = trans2PointTypePose(transformTobeMapped);
-            *sonarCloudTransformed = *transformPointCloud(sonarCloudFromMapDS, &thisPose6D);
-            publishCloud(pubSonarPoints, sonarCloudTransformed, timeLaserInfoStamp, odometryFrame);
         }
         // publish path
         if (pubPath->get_subscription_count() != 0)
