@@ -557,6 +557,8 @@ public:
     void projectPointCloud()
     {
         int cloudSize = laserCloudIn->points.size();
+        int verticalSonarColumnIdn = 0;
+        std::vector<int> patchColumnIdnCountVec(N_SCAN-129, 0);
         // range image projection
         for (int i = 0; i < cloudSize; ++i)
         {
@@ -579,13 +581,11 @@ public:
                     180 / M_PI;
                 rowIdn = (verticalAngle + (N_SCAN - 1)) / 2.0;
             }
-
             if (rowIdn < 0 || rowIdn >= N_SCAN)
                 continue;
 
             if (rowIdn < LIDAR_N_SCAN && rowIdn % downsampleRate != 0)
                 continue;
-
             int columnIdn = -1;
             if (sensor == SensorType::VELODYNE || sensor == SensorType::OUSTER)
             {
@@ -600,7 +600,18 @@ public:
                 columnIdn = columnIdnCountVec[rowIdn];
                 columnIdnCountVec[rowIdn] += 1;
             }
-
+            // Hack where we change the column IDN for vertical sonar points (row 129). This is to avoid these points not fitting in the rangeMat
+            // This is a temporary fix and is probably due to all the points being in the same column horizontally.
+            if (rowIdn == 129)
+            {
+                columnIdn = verticalSonarColumnIdn;
+                verticalSonarColumnIdn += 1;   
+            }
+            if (rowIdn > 129)
+            {
+                columnIdn = patchColumnIdnCountVec[rowIdn-129];
+                patchColumnIdnCountVec[rowIdn-129] += 1;
+            }
 
             if (columnIdn < 0 || columnIdn >= Horizon_SCAN)
                 continue;
