@@ -7,7 +7,7 @@
     pointCloudTopic: "lidar_sonar_cloud"         # Point cloud data
     imuTopic: "ouster/imu"                       # IMU data
     odomTopic: "odometry/imu"                    # IMU pre-preintegration odometry, same frequency as IMU
-    gpsTopic: "odometry/gpsz"                    # GPS odometry topic from navsat, see module_navsat.launch file
+    gpsTopic: "odometry/gps"                    # GPS odometry topic from navsat, see module_navsat.launch file
 
     # Frames
     lidarFrame: "os_lidar"
@@ -16,13 +16,13 @@
     mapFrame: "map"
 
     # GPS Settings
-    useImuHeadingInitialization: false           # if using GPS data, set to "true"
+    useImuHeadingInitialization: true           # if using GPS data, set to "true"
     useGpsElevation: false                       # if GPS elevation is bad, set to "false"
     gpsCovThreshold: 9.0                         # m^2, threshold for using GPS data
     poseCovThreshold: 9.0                       # m^2, threshold for using GPS data
 
     # Export settings
-    savePCD: true                               # https://github.com/TixiaoShan/LIO-SAM/issues/3
+    savePCD: True                               # https://github.com/TixiaoShan/LIO-SAM/issues/3
     savePCDDirectory: "/home/liosamuser/LOAM/"  # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
 
     # Sensor Settings
