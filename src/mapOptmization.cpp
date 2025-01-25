@@ -68,6 +68,7 @@ public:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubHistoryKeyFrames;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubIcpKeyFrames;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubRecentKeyFrames;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubRecentKeyFramesSonar;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubRecentKeyFrame;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloudRegisteredRaw;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubSonarPoints;
@@ -106,8 +107,11 @@ public:
     std::vector<PointType> laserCloudOriSurfVec; // surf point holder for parallel computation
     std::vector<PointType> coeffSelSurfVec;
     std::vector<bool> laserCloudOriSurfFlag;
+    std::vector<PointType> sonarCloudOriVec; // New point cloud for sonar points
+    std::vector<PointType> coeffSelSonarVec; // New point cloud for sonar points
+    std::vector<bool> sonarCloudOriFlag; // New point cloud for sonar points
 
-    map<int, pair<pcl::PointCloud<PointType>, pcl::PointCloud<PointType>>> laserCloudMapContainer;
+    map<int, tuple<pcl::PointCloud<PointType>, pcl::PointCloud<PointType>, pcl::PointCloud<PointType>>> CloudMapContainer;
     pcl::PointCloud<PointType>::Ptr laserCloudCornerFromMap;
     pcl::PointCloud<PointType>::Ptr laserCloudSurfFromMap;
     pcl::PointCloud<PointType>::Ptr laserCloudCornerFromMapDS;
@@ -117,6 +121,7 @@ public:
 
     pcl::KdTreeFLANN<PointType>::Ptr kdtreeCornerFromMap;
     pcl::KdTreeFLANN<PointType>::Ptr kdtreeSurfFromMap;
+    pcl::KdTreeFLANN<PointType>::Ptr kdtreeSonarFromMap;
 
     pcl::KdTreeFLANN<PointType>::Ptr kdtreeSurroundingKeyPoses;
     pcl::KdTreeFLANN<PointType>::Ptr kdtreeHistoryKeyPoses;
@@ -262,6 +267,7 @@ public:
         pubLoopConstraintEdge = create_publisher<visualization_msgs::msg::MarkerArray>("/lio_sam/mapping/loop_closure_constraints", 1);
 
         pubRecentKeyFrames = create_publisher<sensor_msgs::msg::PointCloud2>("lio_sam/mapping/map_local", 1);
+        pubRecentKeyFramesSonar = create_publisher<sensor_msgs::msg::PointCloud2>("lio_sam/mapping/map_local_sonar", 1); // New publisher for sonar points
         pubRecentKeyFrame = create_publisher<sensor_msgs::msg::PointCloud2>("lio_sam/mapping/cloud_registered", 1);
         pubCloudRegisteredRaw = create_publisher<sensor_msgs::msg::PointCloud2>("lio_sam/mapping/cloud_registered_raw", 1);
 
@@ -300,9 +306,15 @@ public:
         laserCloudOriSurfVec.resize(LIDAR_N_SCAN * Horizon_SCAN);
         coeffSelSurfVec.resize(LIDAR_N_SCAN * Horizon_SCAN);
         laserCloudOriSurfFlag.resize(LIDAR_N_SCAN * Horizon_SCAN);
+        
+        // Sonar of size N_SCAN-LIDAR_N_SCAN
+        sonarCloudOriVec.resize((N_SCAN-LIDAR_N_SCAN) * Horizon_SCAN);
+        sonarCloudOriFlag.resize((N_SCAN-LIDAR_N_SCAN) * Horizon_SCAN);
+        coeffSelSonarVec.resize((N_SCAN-LIDAR_N_SCAN) * Horizon_SCAN);
 
         std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), false);
         std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), false);
+        std::fill(sonarCloudOriFlag.begin(), sonarCloudOriFlag.end(), false);
 
         laserCloudCornerFromMap.reset(new pcl::PointCloud<PointType>());
         laserCloudSurfFromMap.reset(new pcl::PointCloud<PointType>());
@@ -313,6 +325,7 @@ public:
 
         kdtreeCornerFromMap.reset(new pcl::KdTreeFLANN<PointType>());
         kdtreeSurfFromMap.reset(new pcl::KdTreeFLANN<PointType>());
+        kdtreeSonarFromMap.reset(new pcl::KdTreeFLANN<PointType>());
 
         for (int i = 0; i < 6; ++i){
             transformTobeMapped[i] = 0;
@@ -752,8 +765,13 @@ public:
             int keyNear = key + i;
             if (keyNear < 0 || keyNear >= cloudSize )
                 continue;
-            *nearKeyframes += *transformPointCloud(cornerCloudKeyFrames[keyNear], &copy_cloudKeyPoses6D->points[keyNear]);
-            *nearKeyframes += *transformPointCloud(surfCloudKeyFrames[keyNear],   &copy_cloudKeyPoses6D->points[keyNear]);
+            if (useLidar) {
+                *nearKeyframes += *transformPointCloud(cornerCloudKeyFrames[keyNear], &copy_cloudKeyPoses6D->points[keyNear]);
+                *nearKeyframes += *transformPointCloud(surfCloudKeyFrames[keyNear],   &copy_cloudKeyPoses6D->points[keyNear]);
+            }
+            if (useSonar) {
+                *nearKeyframes += *transformPointCloud(sonarCloudKeyFrames[keyNear],  &copy_cloudKeyPoses6D->points[keyNear]);
+            }
         }
 
         if (nearKeyframes->empty())
@@ -947,20 +965,21 @@ public:
                 continue;
 
             int thisKeyInd = (int)cloudToExtract->points[i].intensity;
-            if (laserCloudMapContainer.find(thisKeyInd) != laserCloudMapContainer.end()) 
+            if (CloudMapContainer.find(thisKeyInd) != CloudMapContainer.end()) 
             {
                 // transformed cloud available
-                *laserCloudCornerFromMap += laserCloudMapContainer[thisKeyInd].first;
-                *laserCloudSurfFromMap   += laserCloudMapContainer[thisKeyInd].second;
+                *laserCloudCornerFromMap += std::get<0>(CloudMapContainer[thisKeyInd]);
+                *laserCloudSurfFromMap   += std::get<1>(CloudMapContainer[thisKeyInd]);
+                *sonarCloudFromMap       += std::get<2>(CloudMapContainer[thisKeyInd]); // Add sonar points to the map
             } else {
                 // transformed cloud not available
                 pcl::PointCloud<PointType> laserCloudCornerTemp = *transformPointCloud(cornerCloudKeyFrames[thisKeyInd],  &cloudKeyPoses6D->points[thisKeyInd]);
                 pcl::PointCloud<PointType> laserCloudSurfTemp = *transformPointCloud(surfCloudKeyFrames[thisKeyInd],    &cloudKeyPoses6D->points[thisKeyInd]);
-                pcl::PointCloud<PointType> sonarCloudSurfTemp = *transformPointCloud(sonarCloudKeyFrames[thisKeyInd], &cloudKeyPoses6D->points[thisKeyInd]); // Transform and accumulate sonar points
+                pcl::PointCloud<PointType> sonarCloudTemp = *transformPointCloud(sonarCloudKeyFrames[thisKeyInd], &cloudKeyPoses6D->points[thisKeyInd]); // Transform and accumulate sonar points
                 *laserCloudCornerFromMap += laserCloudCornerTemp;
                 *laserCloudSurfFromMap   += laserCloudSurfTemp;
-                *sonarCloudFromMap       += sonarCloudSurfTemp; // Add sonar points to the map
-                laserCloudMapContainer[thisKeyInd] = make_pair(laserCloudCornerTemp, laserCloudSurfTemp);
+                *sonarCloudFromMap       += sonarCloudTemp; // Add sonar points to the map
+                CloudMapContainer[thisKeyInd] = make_tuple(laserCloudCornerTemp, laserCloudSurfTemp, sonarCloudTemp); // Save the transformed cloud
             }
         }
 
@@ -977,8 +996,8 @@ public:
         downSizeFilterSonar.filter(*sonarCloudFromMapDS);
         sonarCloudFromMapDSNum = sonarCloudFromMapDS->size();
         // clear map cache if too large
-        if (laserCloudMapContainer.size() > 1000)
-            laserCloudMapContainer.clear();
+        if (CloudMapContainer.size() > 1000)
+            CloudMapContainer.clear();
     }
 
     void extractSurroundingKeyFrames()
@@ -1184,25 +1203,110 @@ public:
         }
     }
 
+    void sonarOptimizationCoffs()
+    // Based on the surfOptimization function. 
+    {
+        updatePointAssociateToMap();
+
+        #pragma omp parallel for num_threads(numberOfCores)
+        for (int i = 0; i < sonarCloudLastDSNum; i++)
+        {
+            PointType pointOri, pointSel, coeff;
+            std::vector<int> pointSearchInd;
+            std::vector<float> pointSearchSqDis;
+
+            pointOri = sonarCloudLastDS->points[i];
+            pointAssociateToMap(&pointOri, &pointSel); 
+            kdtreeSonarFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
+
+            Eigen::Matrix<float, 5, 3> matA0;
+            Eigen::Matrix<float, 5, 1> matB0;
+            Eigen::Vector3f matX0;
+
+            matA0.setZero();
+            matB0.fill(-1);
+            matX0.setZero();
+
+            if (pointSearchSqDis[4] < 1.0) {
+                for (int j = 0; j < 5; j++) {
+                    matA0(j, 0) = sonarCloudFromMapDS->points[pointSearchInd[j]].x;
+                    matA0(j, 1) = sonarCloudFromMapDS->points[pointSearchInd[j]].y;
+                    matA0(j, 2) = sonarCloudFromMapDS->points[pointSearchInd[j]].z;
+                }
+
+                matX0 = matA0.colPivHouseholderQr().solve(matB0);
+
+                float pa = matX0(0, 0);
+                float pb = matX0(1, 0);
+                float pc = matX0(2, 0);
+                float pd = 1;
+
+                float ps = sqrt(pa * pa + pb * pb + pc * pc);
+                pa /= ps; pb /= ps; pc /= ps; pd /= ps;
+
+                bool planeValid = true;
+                for (int j = 0; j < 5; j++) {
+                    if (fabs(pa * sonarCloudFromMapDS->points[pointSearchInd[j]].x +
+                            pb * sonarCloudFromMapDS->points[pointSearchInd[j]].y +
+                            pc * sonarCloudFromMapDS->points[pointSearchInd[j]].z + pd) > 0.2) {
+                        planeValid = false;
+                        break;
+                    }
+                }
+
+                if (planeValid) {
+                    float pd2 = pa * pointSel.x + pb * pointSel.y + pc * pointSel.z + pd;
+
+                    float s = 1 - 0.9 * fabs(pd2) / sqrt(sqrt(pointOri.x * pointOri.x
+                            + pointOri.y * pointOri.y + pointOri.z * pointOri.z));
+
+                    coeff.x = s * pa;
+                    coeff.y = s * pb;
+                    coeff.z = s * pc;
+                    coeff.intensity = s * pd2;
+
+                    if (s > 0.1) {
+                        sonarCloudOriVec[i] = pointOri;
+                        coeffSelSonarVec[i] = coeff;
+                        sonarCloudOriFlag[i] = true;
+                    }
+                }
+            }
+        }
+    }
+
     void combineOptimizationCoeffs()
     {
-        // combine corner coeffs
-        for (int i = 0; i < laserCloudCornerLastDSNum; ++i){
-            if (laserCloudOriCornerFlag[i] == true){
-                laserCloudOri->push_back(laserCloudOriCornerVec[i]);
-                coeffSel->push_back(coeffSelCornerVec[i]);
+        if (useLidar) {
+            // combine corner coeffs
+            for (int i = 0; i < laserCloudCornerLastDSNum; ++i){
+                if (laserCloudOriCornerFlag[i] == true){
+                    laserCloudOri->push_back(laserCloudOriCornerVec[i]);
+                    coeffSel->push_back(coeffSelCornerVec[i]);
+                }
+            }
+            // combine surf coeffs
+            for (int i = 0; i < laserCloudSurfLastDSNum; ++i){
+                if (laserCloudOriSurfFlag[i] == true){
+                    laserCloudOri->push_back(laserCloudOriSurfVec[i]);
+                    coeffSel->push_back(coeffSelSurfVec[i]);
+                }
             }
         }
-        // combine surf coeffs
-        for (int i = 0; i < laserCloudSurfLastDSNum; ++i){
-            if (laserCloudOriSurfFlag[i] == true){
-                laserCloudOri->push_back(laserCloudOriSurfVec[i]);
-                coeffSel->push_back(coeffSelSurfVec[i]);
+        // combine sonar coeffs
+        if (useSonar) {
+            for (int i = 0; i < sonarCloudLastDSNum; ++i){
+                if (sonarCloudOriFlag[i] == true){
+                    laserCloudOri->push_back(sonarCloudOriVec[i]);
+                    coeffSel->push_back(coeffSelSonarVec[i]);
+                }
             }
         }
+
         // reset flag for next iteration
         std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), false);
         std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), false);
+        std::fill(sonarCloudOriFlag.begin(), sonarCloudOriFlag.end(), false);
     }
 
     bool LMOptimization(int iterCount)
@@ -1337,16 +1441,24 @@ public:
 
         if (laserCloudCornerLastDSNum > edgeFeatureMinValidNum && laserCloudSurfLastDSNum > surfFeatureMinValidNum)
         {
-            kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);
-            kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDS);
+            if (useLidar || !useSonar)
+            {
+                kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);
+                kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDS);
+            }
+            if (useSonar)
+                kdtreeSonarFromMap->setInputCloud(sonarCloudFromMapDS); // Set the sonar map
 
             for (int iterCount = 0; iterCount < 30; iterCount++)
             {
                 laserCloudOri->clear();
                 coeffSel->clear();
 
-                cornerOptimization();
-                surfOptimization();
+                if (useLidar || !useSonar)
+                {
+                    cornerOptimization();
+                    surfOptimization();
+                }
 
                 combineOptimizationCoeffs();
 
@@ -1482,13 +1594,16 @@ public:
             {
                 nav_msgs::msg::Odometry thisGPS = gpsQueue.front();
                 gpsQueue.pop_front();
+                RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Pop GPS message, use it.");
 
                 // GPS too noisy, skip
                 float noise_x = thisGPS.pose.covariance[0];
                 float noise_y = thisGPS.pose.covariance[7];
                 float noise_z = thisGPS.pose.covariance[14];
-                if (noise_x > gpsCovThreshold || noise_y > gpsCovThreshold)
+                if (noise_x > gpsCovThreshold || noise_y > gpsCovThreshold){
+                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "GPS too noisy, skip");
                     continue;
+                }
                 float gps_x = thisGPS.pose.pose.position.x;
                 float gps_y = thisGPS.pose.pose.position.y;
                 float gps_z = thisGPS.pose.pose.position.z;
@@ -1499,24 +1614,30 @@ public:
                 }
 
                 // GPS not properly initialized (0,0,0)
-                if (abs(gps_x) < 1e-6 && abs(gps_y) < 1e-6)
+                if (abs(gps_x) < 1e-6 && abs(gps_y) < 1e-6){
+                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "GPS not properly initialized, skip");
                     continue;
+                }
 
                 // Add GPS every a few meters
                 PointType curGPSPoint;
                 curGPSPoint.x = gps_x;
                 curGPSPoint.y = gps_y;
                 curGPSPoint.z = gps_z;
-                if (pointDistance(curGPSPoint, lastGPSPoint) < 5.0)
+                if (pointDistance(curGPSPoint, lastGPSPoint) < 5.0){
+                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "GPS too close, skip");
                     continue;
-                else
+                }
+                else {
                     lastGPSPoint = curGPSPoint;
-
+                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "GPS added: %f, %f, %f", gps_x, gps_y, gps_z);
+                }
                 gtsam::Vector Vector3(3);
                 Vector3 << max(noise_x, 1.0f), max(noise_y, 1.0f), max(noise_z, 1.0f);
                 noiseModel::Diagonal::shared_ptr gps_noise = noiseModel::Diagonal::Variances(Vector3);
                 gtsam::GPSFactor gps_factor(cloudKeyPoses3D->size(), gtsam::Point3(gps_x, gps_y, gps_z), gps_noise);
                 gtSAMgraph.add(gps_factor);
+                RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Add GPS factor: %f, %f, %f", gps_x, gps_y, gps_z);
 
                 aLoopIsClosed = true;
                 break;
@@ -1641,7 +1762,7 @@ public:
         if (aLoopIsClosed == true)
         {
             // clear map cache
-            laserCloudMapContainer.clear();
+            CloudMapContainer.clear();
             // clear path
             globalPath.poses.clear();
             // update key poses
@@ -1774,13 +1895,17 @@ public:
         publishCloud(pubKeyPoses, cloudKeyPoses3D, timeLaserInfoStamp, odometryFrame);
         // Publish surrounding key frames
         publishCloud(pubRecentKeyFrames, laserCloudSurfFromMapDS, timeLaserInfoStamp, odometryFrame);
+        // Publish surrounding key frames for sonar
+        publishCloud(pubRecentKeyFramesSonar, sonarCloudFromMapDS, timeLaserInfoStamp, odometryFrame);
         // publish registered key frame
         if (pubRecentKeyFrame->get_subscription_count() != 0)
         {
             pcl::PointCloud<PointType>::Ptr cloudOut(new pcl::PointCloud<PointType>());
             PointTypePose thisPose6D = trans2PointTypePose(transformTobeMapped);
+
             *cloudOut += *transformPointCloud(laserCloudCornerLastDS,  &thisPose6D);
             *cloudOut += *transformPointCloud(laserCloudSurfLastDS,    &thisPose6D);
+            *cloudOut += *transformPointCloud(sonarCloudLastDS,          &thisPose6D);
             publishCloud(pubRecentKeyFrame, cloudOut, timeLaserInfoStamp, odometryFrame);
         }
         // publish registered high-res raw cloud

@@ -69,6 +69,10 @@ class ParamServer : public rclcpp::Node
 public:
     std::string robot_id;
 
+    // SLAM
+    bool useLidar;
+    bool useSonar;
+
     //Topics
     string pointCloudTopic;
     string imuTopic;
@@ -210,6 +214,11 @@ public:
                 "Invalid sensor type (must be either 'velodyne' or 'ouster' or 'livox'): " << sensorStr);
             rclcpp::shutdown();
         }
+
+        declare_parameter("useLidar", true);
+        get_parameter("useLidar", useLidar);
+        declare_parameter("useSonar", true);
+        get_parameter("useSonar", useSonar);
 
         declare_parameter("N_SCAN", 144);
         get_parameter("N_SCAN", N_SCAN);
