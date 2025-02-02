@@ -125,6 +125,8 @@ public:
     int edgeFeatureMinValidNum;
     int surfFeatureMinValidNum;
 
+    int sonarFeatureMinValidNum;
+
     // voxel filter paprams
     float odometrySurfLeafSize;
     float mappingCornerLeafSize;
@@ -272,6 +274,9 @@ public:
         get_parameter("edgeFeatureMinValidNum", edgeFeatureMinValidNum);
         declare_parameter("surfFeatureMinValidNum", 100);
         get_parameter("surfFeatureMinValidNum", surfFeatureMinValidNum);
+
+        declare_parameter("sonarFeatureMinValidNum", 10);
+        get_parameter("sonarFeatureMinValidNum", sonarFeatureMinValidNum);
 
         declare_parameter("odometrySurfLeafSize", 0.4);
         get_parameter("odometrySurfLeafSize", odometrySurfLeafSize);

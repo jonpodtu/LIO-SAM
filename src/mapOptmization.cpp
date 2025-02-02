@@ -58,6 +58,9 @@ public:
     ISAM2 *isam;
     Values isamCurrentEstimate;
     Eigen::MatrixXd poseCovariance;
+    Eigen::Matrix4f sonarTransformation;
+
+    pcl::PointCloud<PointType>::Ptr intermediateSonarCloud; // Buffer for intermediate sonar points
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudSurround;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubLaserOdometryGlobal;
@@ -162,6 +165,8 @@ public:
     Eigen::Affine3f transPointAssociateToMap;
     Eigen::Affine3f incrementalOdometryAffineFront;
     Eigen::Affine3f incrementalOdometryAffineBack;
+    Eigen::Affine3f incrementalSonarOdometryAffineFront; // New affine transformation for sonar points
+    Eigen::Affine3f incrementalSonarOdometryAffineBack; // New affine transformation for sonar points
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> br;
 
@@ -282,6 +287,8 @@ public:
 
     void allocateMemory()
     {
+        intermediateSonarCloud.reset(new pcl::PointCloud<PointType>()); // Initialize the buffer
+
         cloudKeyPoses3D.reset(new pcl::PointCloud<PointType>());
         cloudKeyPoses6D.reset(new pcl::PointCloud<PointTypePose>());
         copy_cloudKeyPoses3D.reset(new pcl::PointCloud<PointType>());
@@ -334,6 +341,23 @@ public:
         matP.setZero();
     }
 
+    Eigen::Affine3f interpolatePose(const Eigen::Affine3f& start, const Eigen::Affine3f& end, float ratio)
+    {
+        Eigen::Vector3f startTranslation = start.translation();
+        Eigen::Vector3f endTranslation = end.translation();
+        Eigen::Vector3f interpolatedTranslation = startTranslation + ratio * (endTranslation - startTranslation);
+
+        Eigen::Quaternionf startRotation(start.rotation());
+        Eigen::Quaternionf endRotation(end.rotation());
+        Eigen::Quaternionf interpolatedRotation = startRotation.slerp(ratio, endRotation);
+
+        Eigen::Affine3f interpolatedPose = Eigen::Affine3f::Identity();
+        interpolatedPose.translation() = interpolatedTranslation;
+        interpolatedPose.linear() = interpolatedRotation.toRotationMatrix();
+
+        return interpolatedPose;
+    }
+
     void laserCloudInfoHandler(const lio_sam::msg::CloudInfo::SharedPtr msgIn)
     {
         // extract time stamp
@@ -361,13 +385,39 @@ public:
 
             scan2MapOptimization();
 
+            if (useSonar){
+                sonarScan2MapOptimization();
+            }
+
             saveKeyFramesAndFactor();
 
             correctPoses();
 
             publishOdometry();
 
+            // Transform and map intermediate sonar points
+            if (!cloudKeyPoses3D->points.empty())
+            {
+                Eigen::Affine3f startPose = incrementalOdometryAffineFront;
+                Eigen::Affine3f endPose = incrementalOdometryAffineBack;
+                int numPoints = intermediateSonarCloud->size();
+                for (int i = 0; i < numPoints; ++i)
+                {
+                    float ratio = static_cast<float>(i) / static_cast<float>(numPoints - 1);
+                    Eigen::Affine3f interpolatedPose = interpolatePose(startPose, endPose, ratio);
+                    PointType point = intermediateSonarCloud->points[i];
+                    PointType transformedPoint;
+                    transformedPoint.x = interpolatedPose(0, 0) * point.x + interpolatedPose(0, 1) * point.y + interpolatedPose(0, 2) * point.z + interpolatedPose(0, 3);
+                    transformedPoint.y = interpolatedPose(1, 0) * point.x + interpolatedPose(1, 1) * point.y + interpolatedPose(1, 2) * point.z + interpolatedPose(1, 3);
+                    transformedPoint.z = interpolatedPose(2, 0) * point.x + interpolatedPose(2, 1) * point.y + interpolatedPose(2, 2) * point.z + interpolatedPose(2, 3);
+                    transformedPoint.intensity = point.intensity;
+                    sonarCloudFromMap->points.push_back(transformedPoint);
+                }
+                intermediateSonarCloud->clear(); // Clear the buffer after processing
+            }
+
             publishFrames();
+
         }
     }
 
@@ -1203,110 +1253,71 @@ public:
         }
     }
 
-    void sonarOptimizationCoffs()
-    // Based on the surfOptimization function. 
+    void sonarOptimization()
     {
         updatePointAssociateToMap();
 
-        #pragma omp parallel for num_threads(numberOfCores)
+        pcl::PointCloud<PointType>::Ptr cloudSource(new pcl::PointCloud<PointType>());
+        pcl::PointCloud<PointType>::Ptr cloudTarget(new pcl::PointCloud<PointType>());
+
+        // Extract the source and target point clouds
         for (int i = 0; i < sonarCloudLastDSNum; i++)
         {
-            PointType pointOri, pointSel, coeff;
-            std::vector<int> pointSearchInd;
-            std::vector<float> pointSearchSqDis;
+            PointType pointOri = sonarCloudLastDS->points[i];
+            PointType pointSel;
+            pointAssociateToMap(&pointOri, &pointSel);
+            cloudSource->points.push_back(pointSel);
+        }
 
-            pointOri = sonarCloudLastDS->points[i];
-            pointAssociateToMap(&pointOri, &pointSel); 
-            kdtreeSonarFromMap->nearestKSearch(pointSel, 5, pointSearchInd, pointSearchSqDis);
+        *cloudTarget = *sonarCloudFromMapDS;
 
-            Eigen::Matrix<float, 5, 3> matA0;
-            Eigen::Matrix<float, 5, 1> matB0;
-            Eigen::Vector3f matX0;
+        // Apply ICP
+        pcl::IterativeClosestPoint<PointType, PointType> icp;
+        icp.setMaxCorrespondenceDistance(1.0);
+        icp.setMaximumIterations(50);
+        icp.setTransformationEpsilon(1e-6);
+        icp.setEuclideanFitnessEpsilon(1e-6);
+        icp.setInputSource(cloudSource);
+        icp.setInputTarget(cloudTarget);
 
-            matA0.setZero();
-            matB0.fill(-1);
-            matX0.setZero();
+        pcl::PointCloud<PointType> Final;
+        icp.align(Final);
 
-            if (pointSearchSqDis[4] < 1.0) {
-                for (int j = 0; j < 5; j++) {
-                    matA0(j, 0) = sonarCloudFromMapDS->points[pointSearchInd[j]].x;
-                    matA0(j, 1) = sonarCloudFromMapDS->points[pointSearchInd[j]].y;
-                    matA0(j, 2) = sonarCloudFromMapDS->points[pointSearchInd[j]].z;
-                }
+        if (icp.hasConverged())
+        {
+            Eigen::Matrix4f transformation = icp.getFinalTransformation();
 
-                matX0 = matA0.colPivHouseholderQr().solve(matB0);
+            // Convert the transformation matrix to the format used by LM optimization
+            Eigen::Affine3f transTobe = trans2Affine3f(transformTobeMapped);
+            Eigen::Affine3f transFinal = transTobe * Eigen::Affine3f(transformation);
+            pcl::getTranslationAndEulerAngles(transFinal, transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5], 
+                                            transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
 
-                float pa = matX0(0, 0);
-                float pb = matX0(1, 0);
-                float pc = matX0(2, 0);
-                float pd = 1;
-
-                float ps = sqrt(pa * pa + pb * pb + pc * pc);
-                pa /= ps; pb /= ps; pc /= ps; pd /= ps;
-
-                bool planeValid = true;
-                for (int j = 0; j < 5; j++) {
-                    if (fabs(pa * sonarCloudFromMapDS->points[pointSearchInd[j]].x +
-                            pb * sonarCloudFromMapDS->points[pointSearchInd[j]].y +
-                            pc * sonarCloudFromMapDS->points[pointSearchInd[j]].z + pd) > 0.2) {
-                        planeValid = false;
-                        break;
-                    }
-                }
-
-                if (planeValid) {
-                    float pd2 = pa * pointSel.x + pb * pointSel.y + pc * pointSel.z + pd;
-
-                    float s = 1 - 0.9 * fabs(pd2) / sqrt(sqrt(pointOri.x * pointOri.x
-                            + pointOri.y * pointOri.y + pointOri.z * pointOri.z));
-
-                    coeff.x = s * pa;
-                    coeff.y = s * pb;
-                    coeff.z = s * pc;
-                    coeff.intensity = s * pd2;
-
-                    if (s > 0.1) {
-                        sonarCloudOriVec[i] = pointOri;
-                        coeffSelSonarVec[i] = coeff;
-                        sonarCloudOriFlag[i] = true;
-                    }
-                }
-            }
+            // Store the transformation matrix
+            sonarTransformation = transformation;
         }
     }
 
     void combineOptimizationCoeffs()
     {
-        if (useLidar) {
-            // combine corner coeffs
-            for (int i = 0; i < laserCloudCornerLastDSNum; ++i){
-                if (laserCloudOriCornerFlag[i] == true){
-                    laserCloudOri->push_back(laserCloudOriCornerVec[i]);
-                    coeffSel->push_back(coeffSelCornerVec[i]);
-                }
-            }
-            // combine surf coeffs
-            for (int i = 0; i < laserCloudSurfLastDSNum; ++i){
-                if (laserCloudOriSurfFlag[i] == true){
-                    laserCloudOri->push_back(laserCloudOriSurfVec[i]);
-                    coeffSel->push_back(coeffSelSurfVec[i]);
-                }
+        // combine corner coeffs
+        for (int i = 0; i < laserCloudCornerLastDSNum; ++i){
+            if (laserCloudOriCornerFlag[i] == true){
+                laserCloudOri->push_back(laserCloudOriCornerVec[i]);
+                coeffSel->push_back(coeffSelCornerVec[i]);
             }
         }
-        // combine sonar coeffs
-        if (useSonar) {
-            for (int i = 0; i < sonarCloudLastDSNum; ++i){
-                if (sonarCloudOriFlag[i] == true){
-                    laserCloudOri->push_back(sonarCloudOriVec[i]);
-                    coeffSel->push_back(coeffSelSonarVec[i]);
-                }
+        // combine surf coeffs
+        for (int i = 0; i < laserCloudSurfLastDSNum; ++i){
+            if (laserCloudOriSurfFlag[i] == true){
+                laserCloudOri->push_back(laserCloudOriSurfVec[i]);
+                coeffSel->push_back(coeffSelSurfVec[i]);
             }
         }
 
         // reset flag for next iteration
         std::fill(laserCloudOriCornerFlag.begin(), laserCloudOriCornerFlag.end(), false);
         std::fill(laserCloudOriSurfFlag.begin(), laserCloudOriSurfFlag.end(), false);
-        std::fill(sonarCloudOriFlag.begin(), sonarCloudOriFlag.end(), false);
     }
 
     bool LMOptimization(int iterCount)
@@ -1441,24 +1452,16 @@ public:
 
         if (laserCloudCornerLastDSNum > edgeFeatureMinValidNum && laserCloudSurfLastDSNum > surfFeatureMinValidNum)
         {
-            if (useLidar || !useSonar)
-            {
-                kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);
-                kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDS);
-            }
-            if (useSonar)
-                kdtreeSonarFromMap->setInputCloud(sonarCloudFromMapDS); // Set the sonar map
+            kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);
+            kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDS);
 
             for (int iterCount = 0; iterCount < 30; iterCount++)
             {
                 laserCloudOri->clear();
                 coeffSel->clear();
 
-                if (useLidar || !useSonar)
-                {
-                    cornerOptimization();
-                    surfOptimization();
-                }
+                cornerOptimization();
+                surfOptimization();
 
                 combineOptimizationCoeffs();
 
@@ -1469,6 +1472,26 @@ public:
             transformUpdate();
         } else {
             RCLCPP_WARN(get_logger(), "Not enough features! Only %d edge and %d planar features available.", laserCloudCornerLastDSNum, laserCloudSurfLastDSNum);
+        }
+    }
+
+    void sonarScan2MapOptimization()
+    {
+        if (cloudKeyPoses3D->points.empty())
+            return;
+
+        if (sonarCloudLastDSNum > sonarFeatureMinValidNum)
+        {
+            kdtreeSonarFromMap->setInputCloud(sonarCloudFromMapDS); // Set the sonar map for the ICP
+
+            for (int iterCount = 0; iterCount < 30; iterCount++)
+            {
+                sonarOptimization();
+            }
+
+            transformUpdateSonar();
+        } else {
+            RCLCPP_WARN(get_logger(), "Not enough features! Only %d sonar features available.", sonarCloudLastDSNum);
         }
     }
 
@@ -1502,6 +1525,21 @@ public:
         transformTobeMapped[5] = constraintTransformation(transformTobeMapped[5], z_tollerance);
 
         incrementalOdometryAffineBack = trans2Affine3f(transformTobeMapped);
+    }
+
+    void transformUpdateSonar()
+    {
+        // Apply the sonar transformation
+        Eigen::Affine3f transTobe = trans2Affine3f(transformTobeMapped);
+        Eigen::Affine3f transFinal = transTobe * Eigen::Affine3f(sonarTransformation);
+        pcl::getTranslationAndEulerAngles(transFinal, transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5], 
+                                        transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
+
+        transformTobeMapped[0] = constraintTransformation(transformTobeMapped[0], rotation_tollerance);
+        transformTobeMapped[1] = constraintTransformation(transformTobeMapped[1], rotation_tollerance);
+        transformTobeMapped[5] = constraintTransformation(transformTobeMapped[5], z_tollerance);
+
+        incrementalSonarOdometryAffineBack = trans2Affine3f(transformTobeMapped);
     }
 
     float constraintTransformation(float value, float limit)
@@ -1553,6 +1591,24 @@ public:
             gtsam::Pose3 poseFrom = pclPointTogtsamPose3(cloudKeyPoses6D->points.back());
             gtsam::Pose3 poseTo   = trans2gtsamPose(transformTobeMapped);
             gtSAMgraph.add(BetweenFactor<Pose3>(cloudKeyPoses3D->size()-1, cloudKeyPoses3D->size(), poseFrom.between(poseTo), odometryNoise));
+            initialEstimate.insert(cloudKeyPoses3D->size(), poseTo);
+        }
+    }
+
+    void addSonarFactor()
+    {
+        if (cloudKeyPoses3D->points.empty())
+        {
+            noiseModel::Diagonal::shared_ptr priorNoise = noiseModel::Diagonal::Variances((Vector(6) << 1e-2, 1e-2, M_PI*M_PI, 1e8, 1e8, 1e8).finished()); // rad*rad, meter*meter
+            gtSAMgraph.add(PriorFactor<Pose3>(0, trans2gtsamPose(transformTobeMapped), priorNoise));
+            initialEstimate.insert(0, trans2gtsamPose(transformTobeMapped));
+        }
+        else
+        {
+            noiseModel::Diagonal::shared_ptr sonarNoise = noiseModel::Diagonal::Variances((Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished());
+            gtsam::Pose3 poseFrom = pclPointTogtsamPose3(cloudKeyPoses6D->points.back());
+            gtsam::Pose3 poseTo = trans2gtsamPose(transformTobeMapped);
+            gtSAMgraph.add(BetweenFactor<Pose3>(cloudKeyPoses3D->size()-1, cloudKeyPoses3D->size(), poseFrom.between(poseTo), sonarNoise));
             initialEstimate.insert(cloudKeyPoses3D->size(), poseTo);
         }
     }
@@ -1672,6 +1728,12 @@ public:
 
         // odom factor
         addOdomFactor();
+
+        if (useSonar)
+        {
+            // sonar factor
+            addSonarFactor();
+        }
 
         // gps factor
         addGPSFactor();
