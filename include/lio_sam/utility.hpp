@@ -72,6 +72,7 @@ public:
     // SLAM
     bool useLidar;
     bool useSonar;
+    bool sonarMapInterpolation;
 
     //Topics
     string pointCloudTopic;
@@ -221,6 +222,8 @@ public:
         get_parameter("useLidar", useLidar);
         declare_parameter("useSonar", true);
         get_parameter("useSonar", useSonar);
+        declare_parameter("sonarMapInterpolation", true);
+        get_parameter("sonarMapInterpolation", sonarMapInterpolation);
 
         declare_parameter("N_SCAN", 144);
         get_parameter("N_SCAN", N_SCAN);

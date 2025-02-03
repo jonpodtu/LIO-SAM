@@ -5,7 +5,8 @@
     
     # SLAM settings
     useLidar: true                              # if using LiDAR data, set to "true"
-    useSonar: false                             # if using Sonar data, set to "true"
+    useSonar: false                             # for using the sonar data in optimization. Not working yet.
+    sonarMapInterpolation: false                 # we can interpolate the sonar data to get a denser point cloud. 
 
     # Topics
     pointCloudTopic: "lidar_sonar_cloud"         # Point cloud data
@@ -39,11 +40,11 @@
     lidarMinRange: 1.0                           # default: 1.0, minimum lidar range to be used
     lidarMaxRange: 1000.0                        # default: 1000.0, maximum lidar range to be used
 
-    # IMU Settings
-    imuAccNoise: 3.9939570888238808e-03
-    imuGyrNoise: 1.5636343949698187e-03
-    imuAccBiasN: 6.4356659353532566e-05
-    imuGyrBiasN: 3.5640318696367613e-05
+    # IMU Settings. Gathered from Allan Variance analysis
+    imuAccNoise: 0.0046947105597785295           # 3.9939570888238808e-03
+    imuGyrNoise: 8.043689254631626e-05           # 1.5636343949698187e-03
+    imuAccBiasN: 0.0001493752467020681           # 6.4356659353532566e-05
+    imuGyrBiasN: 2.9910922532186554e-06          # 3.5640318696367613e-05
 
     imuGravity: 9.81511
     imuRPYWeight: 0.01
@@ -68,7 +69,7 @@
     odometrySurfLeafSize: 0.4                     # default: 0.4 - outdoor, 0.2 - indoor
     mappingCornerLeafSize: 0.2                    # default: 0.2 - outdoor, 0.1 - indoor
     mappingSurfLeafSize: 0.4                      # default: 0.4 - outdoor, 0.2 - indoor
-    sonarCloudLeafSize: 0.05                       # The lower, the more dense the point cloud
+    sonarCloudLeafSize: 0.1                       # The lower, the more dense the point cloud
 
     # robot motion constraint (in case you are using a 2D robot)
     z_tollerance: 1000.0                          # meters
@@ -79,7 +80,7 @@
     mappingProcessInterval: 0.15                  # seconds, regulate mapping frequency
 
     # Surrounding map
-    surroundingkeyframeAddingDistThreshold: 0.02  # meters, regulate keyframe adding threshold
+    surroundingkeyframeAddingDistThreshold: 0.01  # meters, regulate keyframe adding threshold
     surroundingkeyframeAddingAngleThreshold: 0.1  # radians, regulate keyframe adding threshold
     surroundingKeyframeDensity: 1.0               # meters, downsample surrounding keyframe poses   
     surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization

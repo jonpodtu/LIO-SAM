@@ -60,7 +60,8 @@ public:
     Eigen::MatrixXd poseCovariance;
     Eigen::Matrix4f sonarTransformation;
 
-    pcl::PointCloud<PointType>::Ptr intermediateSonarCloud; // Buffer for intermediate sonar points
+    std::vector<pcl::PointCloud<PointType>::Ptr> intermediateSonarClouds; // Buffer for intermediate sonar clouds
+    std::vector<double> sonarTimestamps; // Buffer for sonar cloud timestamps
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudSurround;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubLaserOdometryGlobal;
@@ -100,6 +101,7 @@ public:
     pcl::PointCloud<PointType>::Ptr laserCloudSurfLastDS; // downsampled surf feature set from odoOptimization
     pcl::PointCloud<PointType>::Ptr sonarCloudLast; // New point cloud for sonar points
     pcl::PointCloud<PointType>::Ptr sonarCloudLastDS; // New point cloud for sonar points
+    pcl::PointCloud<PointType>::Ptr sonarCloud; // Buffer for accumulated intermediate sonar cloud
 
     pcl::PointCloud<PointType>::Ptr laserCloudOri;
     pcl::PointCloud<PointType>::Ptr coeffSel;
@@ -287,7 +289,8 @@ public:
 
     void allocateMemory()
     {
-        intermediateSonarCloud.reset(new pcl::PointCloud<PointType>()); // Initialize the buffer
+        intermediateSonarClouds.clear(); // Initialize the buffer
+        sonarTimestamps.clear(); // Initialize the timestamp buffer
 
         cloudKeyPoses3D.reset(new pcl::PointCloud<PointType>());
         cloudKeyPoses6D.reset(new pcl::PointCloud<PointTypePose>());
@@ -303,7 +306,7 @@ public:
         laserCloudCornerLastDS.reset(new pcl::PointCloud<PointType>()); // downsampled corner featuer set from odoOptimization
         laserCloudSurfLastDS.reset(new pcl::PointCloud<PointType>()); // downsampled surf featuer set from odoOptimization
         sonarCloudLastDS.reset(new pcl::PointCloud<PointType>()); // New point cloud for sonar points
-
+        sonarCloud.reset(new pcl::PointCloud<PointType>()); // New point cloud for combined sonar points
         laserCloudOri.reset(new pcl::PointCloud<PointType>());
         coeffSel.reset(new pcl::PointCloud<PointType>());
 
@@ -341,19 +344,28 @@ public:
         matP.setZero();
     }
 
-    Eigen::Affine3f interpolatePose(const Eigen::Affine3f& start, const Eigen::Affine3f& end, float ratio)
+    PointTypePose interpolatePose(const Eigen::Affine3f& start, const Eigen::Affine3f& end, float ratio)
     {
+        // Interpolate translation
         Eigen::Vector3f startTranslation = start.translation();
         Eigen::Vector3f endTranslation = end.translation();
-        Eigen::Vector3f interpolatedTranslation = startTranslation + ratio * (endTranslation - startTranslation);
+        Eigen::Vector3f interpolatedTranslation = (1 - ratio) * startTranslation + ratio * endTranslation;
 
+        // Interpolate rotation using quaternions
         Eigen::Quaternionf startRotation(start.rotation());
         Eigen::Quaternionf endRotation(end.rotation());
         Eigen::Quaternionf interpolatedRotation = startRotation.slerp(ratio, endRotation);
 
-        Eigen::Affine3f interpolatedPose = Eigen::Affine3f::Identity();
-        interpolatedPose.translation() = interpolatedTranslation;
-        interpolatedPose.linear() = interpolatedRotation.toRotationMatrix();
+        // Convert interpolated pose to PointTypePose
+        PointTypePose interpolatedPose;
+        interpolatedPose.x = interpolatedTranslation.x();
+        interpolatedPose.y = interpolatedTranslation.y();
+        interpolatedPose.z = interpolatedTranslation.z();
+
+        Eigen::Vector3f euler = interpolatedRotation.toRotationMatrix().eulerAngles(0, 1, 2);
+        interpolatedPose.roll = euler.x();
+        interpolatedPose.pitch = euler.y();
+        interpolatedPose.yaw = euler.z();
 
         return interpolatedPose;
     }
@@ -369,6 +381,10 @@ public:
         pcl::fromROSMsg(msgIn->cloud_corner,  *laserCloudCornerLast);
         pcl::fromROSMsg(msgIn->cloud_surface, *laserCloudSurfLast);
         pcl::fromROSMsg(msgIn->cloud_sonar,  *sonarCloudLast); // Extract the new point cloud for sonar points
+
+        // Accumulate sonar points
+        intermediateSonarClouds.push_back(sonarCloudLast);
+        sonarTimestamps.push_back(timeLaserInfoCur);
 
         std::lock_guard<std::mutex> lock(mtx);
 
@@ -394,27 +410,6 @@ public:
             correctPoses();
 
             publishOdometry();
-
-            // Transform and map intermediate sonar points
-            if (!cloudKeyPoses3D->points.empty())
-            {
-                Eigen::Affine3f startPose = incrementalOdometryAffineFront;
-                Eigen::Affine3f endPose = incrementalOdometryAffineBack;
-                int numPoints = intermediateSonarCloud->size();
-                for (int i = 0; i < numPoints; ++i)
-                {
-                    float ratio = static_cast<float>(i) / static_cast<float>(numPoints - 1);
-                    Eigen::Affine3f interpolatedPose = interpolatePose(startPose, endPose, ratio);
-                    PointType point = intermediateSonarCloud->points[i];
-                    PointType transformedPoint;
-                    transformedPoint.x = interpolatedPose(0, 0) * point.x + interpolatedPose(0, 1) * point.y + interpolatedPose(0, 2) * point.z + interpolatedPose(0, 3);
-                    transformedPoint.y = interpolatedPose(1, 0) * point.x + interpolatedPose(1, 1) * point.y + interpolatedPose(1, 2) * point.z + interpolatedPose(1, 3);
-                    transformedPoint.z = interpolatedPose(2, 0) * point.x + interpolatedPose(2, 1) * point.y + interpolatedPose(2, 2) * point.z + interpolatedPose(2, 3);
-                    transformedPoint.intensity = point.intensity;
-                    sonarCloudFromMap->points.push_back(transformedPoint);
-                }
-                intermediateSonarCloud->clear(); // Clear the buffer after processing
-            }
 
             publishFrames();
 
@@ -1077,12 +1072,16 @@ public:
         downSizeFilterSurf.setInputCloud(laserCloudSurfLast);
         downSizeFilterSurf.filter(*laserCloudSurfLastDS);
         laserCloudSurfLastDSNum = laserCloudSurfLastDS->size();
+    }
 
-        // Downsample sonar cloud from current scan
+    void downsampleCurrentScanSonar()
+    {
+        // Downsample cloud from current scan
         sonarCloudLastDS->clear();
-        downSizeFilterSonar.setInputCloud(sonarCloudLast);
+        downSizeFilterSonar.setInputCloud(sonarCloud);
         downSizeFilterSonar.filter(*sonarCloudLastDS);
         sonarCloudLastDSNum = sonarCloudLastDS->size();
+        sonarCloud->clear(); // Clear the sonar cloud
     }
 
     void updatePointAssociateToMap()
@@ -1802,19 +1801,69 @@ public:
         // save all the received edge and surf points
         pcl::PointCloud<PointType>::Ptr thisCornerKeyFrame(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr thisSurfKeyFrame(new pcl::PointCloud<PointType>());
-        pcl::PointCloud<PointType>::Ptr thisSonarKeyFrame(new pcl::PointCloud<PointType>());
         pcl::copyPointCloud(*laserCloudCornerLastDS,  *thisCornerKeyFrame);
         pcl::copyPointCloud(*laserCloudSurfLastDS,    *thisSurfKeyFrame);
-        pcl::copyPointCloud(*sonarCloudLastDS,          *thisSonarKeyFrame);
 
         // save key frame cloud
         cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
         surfCloudKeyFrames.push_back(thisSurfKeyFrame);
-        sonarCloudKeyFrames.push_back(thisSonarKeyFrame);
         
+        if (sonarMapInterpolation){
+            updateSonarMap(); // Linear interpolation of sonar points. Better to do this after the optimization as long as the sonar points are not used for the optimization
+        }
+
         // save path for visualization
         updatePath(thisPose6D);
     }
+
+    void updateSonarMap()
+    {
+        pcl::PointCloud<PointType>::Ptr thisSonarKeyFrame(new pcl::PointCloud<PointType>());
+        // Interpolate and transform sonar points
+        if (cloudKeyPoses6D->size() > 1) {
+            PointTypePose previousPose = cloudKeyPoses6D->points[cloudKeyPoses6D->size() - 2];
+            PointTypePose thisPose6D = cloudKeyPoses6D->points[cloudKeyPoses6D->size() - 1];
+            Eigen::Affine3f startPose = pclPointToAffine3f(previousPose);
+            Eigen::Affine3f endPose = pclPointToAffine3f(thisPose6D);
+            
+            // Transform startPose to be relative to endPose
+            Eigen::Affine3f relativeStartPose = endPose.inverse() * startPose;
+
+            double startTime = sonarTimestamps.front();
+            double endTime = sonarTimestamps.back();
+
+            for (size_t i = 0; i < intermediateSonarClouds.size(); ++i)
+            {
+                pcl::PointCloud<PointType>::Ptr cloud = intermediateSonarClouds[i];
+                double timestamp = sonarTimestamps[i];
+                float ratio = (timestamp - startTime) / (endTime - startTime);
+                if (ratio < 0 || ratio > 1)
+                {
+                    RCLCPP_WARN(get_logger(), "Sonar scan timestamp out of range: %f", timestamp);
+                    continue;
+                }
+                // Print the ratio for debugging
+                cout << "Ratio: " << ratio << endl;
+                PointTypePose interpolatedPose = interpolatePose(relativeStartPose, Eigen::Affine3f::Identity(), ratio);
+
+                // Transform the cloud using the interpolated pose
+                pcl::PointCloud<PointType>::Ptr transformedCloud = transformPointCloud(cloud, &interpolatedPose);
+                
+                // Add the transformed points to the sonarCloud
+                *sonarCloud += *transformedCloud;
+            }
+
+        } else {
+            pcl::copyPointCloud(*sonarCloudLast, *sonarCloud); // If there is only one pose, just copy the last scan
+        }
+        intermediateSonarClouds.clear(); // Clear the buffer after processing
+        sonarTimestamps.clear(); // Clear the timestamp buffer
+        
+        downsampleCurrentScanSonar();
+        pcl::copyPointCloud(*sonarCloudLastDS, *thisSonarKeyFrame);
+        sonarCloudKeyFrames.push_back(thisSonarKeyFrame);
+
+        }
 
     void correctPoses()
     {
@@ -1848,6 +1897,7 @@ public:
             aLoopIsClosed = false;
         }
     }
+
 
     void updatePath(const PointTypePose& pose_in)
     {
