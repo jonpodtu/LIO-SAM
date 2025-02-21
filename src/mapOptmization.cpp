@@ -427,6 +427,10 @@ public:
         po->y = transPointAssociateToMap(1,0) * pi->x + transPointAssociateToMap(1,1) * pi->y + transPointAssociateToMap(1,2) * pi->z + transPointAssociateToMap(1,3);
         po->z = transPointAssociateToMap(2,0) * pi->x + transPointAssociateToMap(2,1) * pi->y + transPointAssociateToMap(2,2) * pi->z + transPointAssociateToMap(2,3);
         po->intensity = pi->intensity;
+        po->normal_x = pi->normal_x;
+        po->normal_y = pi->normal_y;
+        po->normal_z = pi->normal_z;
+        po->curvature = pi->curvature;
     }
 
     pcl::PointCloud<PointType>::Ptr transformPointCloud(pcl::PointCloud<PointType>::Ptr cloudIn, PointTypePose* transformIn)
@@ -446,6 +450,10 @@ public:
             cloudOut->points[i].y = transCur(1,0) * pointFrom.x + transCur(1,1) * pointFrom.y + transCur(1,2) * pointFrom.z + transCur(1,3);
             cloudOut->points[i].z = transCur(2,0) * pointFrom.x + transCur(2,1) * pointFrom.y + transCur(2,2) * pointFrom.z + transCur(2,3);
             cloudOut->points[i].intensity = pointFrom.intensity;
+            cloudOut->points[i].normal_x = pointFrom.normal_x;
+            cloudOut->points[i].normal_y = pointFrom.normal_y;
+            cloudOut->points[i].normal_z = pointFrom.normal_z;
+            cloudOut->points[i].curvature = pointFrom.curvature;
         }
         return cloudOut;
     }
@@ -1358,11 +1366,19 @@ public:
             pointOri.x = laserCloudOri->points[i].y;
             pointOri.y = laserCloudOri->points[i].z;
             pointOri.z = laserCloudOri->points[i].x;
+            pointOri.normal_x = laserCloudOri->points[i].normal_x;
+            pointOri.normal_y = laserCloudOri->points[i].normal_z;
+            pointOri.normal_z = laserCloudOri->points[i].normal_y;
+            pointOri.curvature = laserCloudOri->points[i].curvature;
             // lidar -> camera
             coeff.x = coeffSel->points[i].y;
             coeff.y = coeffSel->points[i].z;
             coeff.z = coeffSel->points[i].x;
             coeff.intensity = coeffSel->points[i].intensity;
+            coeff.normal_x = coeffSel->points[i].normal_x;
+            coeff.normal_y = coeffSel->points[i].normal_y;
+            coeff.normal_z = coeffSel->points[i].normal_z;
+            coeff.curvature = coeffSel->points[i].curvature;
             // in camera
             float arx = (crx*sry*srz*pointOri.x + crx*crz*sry*pointOri.y - srx*sry*pointOri.z) * coeff.x
                       + (-srx*srz*pointOri.x - crz*srx*pointOri.y - crx*pointOri.z) * coeff.y
@@ -1649,14 +1665,12 @@ public:
             {
                 nav_msgs::msg::Odometry thisGPS = gpsQueue.front();
                 gpsQueue.pop_front();
-                RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Pop GPS message, use it.");
 
                 // GPS too noisy, skip
                 float noise_x = thisGPS.pose.covariance[0];
                 float noise_y = thisGPS.pose.covariance[7];
                 float noise_z = thisGPS.pose.covariance[14];
                 if (noise_x > gpsCovThreshold || noise_y > gpsCovThreshold){
-                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "GPS too noisy, skip");
                     continue;
                 }
                 float gps_x = thisGPS.pose.pose.position.x;
@@ -1670,7 +1684,6 @@ public:
 
                 // GPS not properly initialized (0,0,0)
                 if (abs(gps_x) < 1e-6 && abs(gps_y) < 1e-6){
-                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "GPS not properly initialized, skip");
                     continue;
                 }
 
@@ -1680,7 +1693,6 @@ public:
                 curGPSPoint.y = gps_y;
                 curGPSPoint.z = gps_z;
                 if (pointDistance(curGPSPoint, lastGPSPoint) < 5.0){
-                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "GPS too close, skip");
                     continue;
                 }
                 else {
@@ -1808,9 +1820,7 @@ public:
         cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
         surfCloudKeyFrames.push_back(thisSurfKeyFrame);
         
-        if (sonarMapInterpolation){
-            updateSonarMap(); // Linear interpolation of sonar points. Better to do this after the optimization as long as the sonar points are not used for the optimization
-        }
+        updateSonarMap(); // Linear interpolation of sonar points. Better to do this after the optimization as long as the sonar points are not used for the optimization
 
         // save path for visualization
         updatePath(thisPose6D);
@@ -1819,8 +1829,9 @@ public:
     void updateSonarMap()
     {
         pcl::PointCloud<PointType>::Ptr thisSonarKeyFrame(new pcl::PointCloud<PointType>());
-        // Interpolate and transform sonar points
-        if (cloudKeyPoses6D->size() > 1) {
+        // Interpolate and transform sonar points if sonarMapInterpolation is enabled
+        if (cloudKeyPoses6D->size() > 1 && sonarMapInterpolation)
+        {
             PointTypePose previousPose = cloudKeyPoses6D->points[cloudKeyPoses6D->size() - 2];
             PointTypePose thisPose6D = cloudKeyPoses6D->points[cloudKeyPoses6D->size() - 1];
             Eigen::Affine3f startPose = pclPointToAffine3f(previousPose);

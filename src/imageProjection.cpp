@@ -550,6 +550,10 @@ public:
         newPoint.y = transBt(1,0) * point->x + transBt(1,1) * point->y + transBt(1,2) * point->z + transBt(1,3);
         newPoint.z = transBt(2,0) * point->x + transBt(2,1) * point->y + transBt(2,2) * point->z + transBt(2,3);
         newPoint.intensity = point->intensity;
+        newPoint.normal_x = point->normal_x;
+        newPoint.normal_y = point->normal_y;
+        newPoint.normal_z = point->normal_z;
+        newPoint.curvature = point->curvature;
 
         return newPoint;
     }
@@ -567,6 +571,10 @@ public:
             thisPoint.y = laserCloudIn->points[i].y;
             thisPoint.z = laserCloudIn->points[i].z;
             thisPoint.intensity = laserCloudIn->points[i].intensity;
+            thisPoint.normal_x = 0.0;
+            thisPoint.normal_y = 0.0;
+            thisPoint.normal_z = 0.0;
+            thisPoint.curvature = static_cast<float>(laserCloudIn->points[i].ring); // Ring index
 
             float range = pointDistance(thisPoint);
             if (range < lidarMinRange || range > lidarMaxRange)

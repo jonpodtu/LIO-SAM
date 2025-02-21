@@ -60,7 +60,7 @@
 
 using namespace std;
 
-typedef pcl::PointXYZI PointType;
+typedef pcl::PointXYZINormal PointType;
 
 enum class SensorType { VELODYNE, OUSTER, LIVOX };
 

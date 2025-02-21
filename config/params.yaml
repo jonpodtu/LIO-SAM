@@ -5,14 +5,14 @@
     
     # SLAM settings
     useLidar: true                              # if using LiDAR data, set to "true"
-    useSonar: false                             # for using the sonar data in optimization. Not working yet.
+    useSonar: false                             # for using the sonar data in slam. Not working yet.
     sonarMapInterpolation: false                 # we can interpolate the sonar data to get a denser point cloud. 
 
     # Topics
     pointCloudTopic: "lidar_sonar_cloud"         # Point cloud data
     imuTopic: "ouster/imu"                       # IMU data
     odomTopic: "odometry/imu"                    # IMU pre-preintegration odometry, same frequency as IMU
-    gpsTopic: "odometry/gps"                    # GPS odometry topic from navsat, see module_navsat.launch file
+    gpsTopic: "odometry/gpsz"                    # GPS odometry topic from navsat, see module_navsat.launch file
 
     # Frames
     lidarFrame: "os_lidar"
@@ -21,10 +21,10 @@
     mapFrame: "map"
 
     # GPS Settings
-    useImuHeadingInitialization: true           # if using GPS data, set to "true"
+    useImuHeadingInitialization: false           # if using GPS data, set to "true"
     useGpsElevation: false                       # if GPS elevation is bad, set to "false"
-    gpsCovThreshold: 9.0                         # m^2, threshold for using GPS data
-    poseCovThreshold: 9.0                       # m^2, threshold for using GPS data
+    gpsCovThreshold: 6.0                         # m^2, threshold for using GPS data
+    poseCovThreshold: 25.0                       # m^2, threshold for using GPS data
 
     # Export settings
     savePCD: true                               # https://github.com/TixiaoShan/LIO-SAM/issues/3
@@ -81,7 +81,7 @@
 
     # Surrounding map
     surroundingkeyframeAddingDistThreshold: 0.01  # meters, regulate keyframe adding threshold
-    surroundingkeyframeAddingAngleThreshold: 0.1  # radians, regulate keyframe adding threshold
+    surroundingkeyframeAddingAngleThreshold: 0.05  # radians, regulate keyframe adding threshold
     surroundingKeyframeDensity: 1.0               # meters, downsample surrounding keyframe poses   
     surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization
     # (when loop closure disabled)
