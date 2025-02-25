@@ -240,32 +240,32 @@ public:
                     downSizeFilterCorner.setInputCloud(globalCornerCloud);
                     downSizeFilterCorner.setLeafSize(req->resolution, req->resolution, req->resolution);
                     downSizeFilterCorner.filter(*globalCornerCloudDS);
-                    pcl::io::savePCDFileASCII(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloudDS);
+                    pcl::io::savePCDFileASCII(saveMapDirectory + "/cloudCorner.pcd", *globalCornerCloudDS);
                     // down-sample and save surf cloud
                     downSizeFilterSurf.setInputCloud(globalSurfCloud);
                     downSizeFilterSurf.setLeafSize(req->resolution, req->resolution, req->resolution);
                     downSizeFilterSurf.filter(*globalSurfCloudDS);
-                    pcl::io::savePCDFileASCII(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloudDS);
+                    pcl::io::savePCDFileASCII(saveMapDirectory + "/cloudSurf.pcd", *globalSurfCloudDS);
                     // down-sample and save sonar cloud
                     downSizeFilterSonar.setInputCloud(globalSonarCloud);
                     downSizeFilterSonar.setLeafSize(req->resolution, req->resolution, req->resolution);
                     downSizeFilterSonar.filter(*globalSonarCloud);
-                    pcl::io::savePCDFileASCII(saveMapDirectory + "/SonarMap.pcd", *globalSonarCloud);
+                    pcl::io::savePCDFileASCII(saveMapDirectory + "/cloudSonar.pcd", *globalSonarCloud);
                 }
                 else
                 {
                     // save corner cloud
-                    pcl::io::savePCDFileASCII(saveMapDirectory + "/CornerMap.pcd", *globalCornerCloud);
+                    pcl::io::savePCDFileASCII(saveMapDirectory + "/cloudCorner.pcd", *globalCornerCloud);
                     // save surf cloud
-                    pcl::io::savePCDFileASCII(saveMapDirectory + "/SurfMap.pcd", *globalSurfCloud);
+                    pcl::io::savePCDFileASCII(saveMapDirectory + "/cloudSurf.pcd", *globalSurfCloud);
                     // save sonar cloud
-                    pcl::io::savePCDFileASCII(saveMapDirectory + "/SonarMap.pcd", *globalSonarCloud);
+                    pcl::io::savePCDFileASCII(saveMapDirectory + "/cloudSonar.pcd", *globalSonarCloud);
                 }
                 // save global point cloud map
                 *globalMapCloud += *globalCornerCloud;
                 *globalMapCloud += *globalSurfCloud;
                 *globalMapCloud += *globalSonarCloud;
-                int ret = pcl::io::savePCDFileASCII(saveMapDirectory + "/GlobalMap.pcd", *globalMapCloud);
+                int ret = pcl::io::savePCDFileASCII(saveMapDirectory + "/globalCloud.pcd", *globalMapCloud);
                 res->success = ret == 0;
                 downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
                 downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);

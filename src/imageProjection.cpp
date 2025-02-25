@@ -571,10 +571,10 @@ public:
             thisPoint.y = laserCloudIn->points[i].y;
             thisPoint.z = laserCloudIn->points[i].z;
             thisPoint.intensity = laserCloudIn->points[i].intensity;
-            thisPoint.normal_x = static_cast<float>(laserCloudIn->points[i].ring); // Ring index
+            thisPoint.normal_x = 0.0;
             thisPoint.normal_y = 0.0;
             thisPoint.normal_z = 0.0;
-            thisPoint.curvature = 0.0;
+            thisPoint.curvature = static_cast<float>(laserCloudIn->points[i].ring); // Ring index
 
             float range = pointDistance(thisPoint);
             if (range < lidarMinRange || range > lidarMaxRange)
