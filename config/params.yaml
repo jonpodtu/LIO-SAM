@@ -6,7 +6,7 @@
     # SLAM settings
     useLidar: true                              # if using LiDAR data, set to "true"
     useSonar: false                             # for using the sonar data in slam. Not working yet.
-    sonarMapInterpolation: false                 # we can interpolate the sonar data to get a denser point cloud. 
+    sonarMapInterpolation: true                 # we can interpolate the sonar data to get a denser point cloud. 
 
     # Topics
     pointCloudTopic: "lidar_sonar_cloud"         # Point cloud data
@@ -27,8 +27,8 @@
     poseCovThreshold: 25.0                       # m^2, threshold for using GPS data
 
     # Export settings
-    savePCD: true                               # https://github.com/TixiaoShan/LIO-SAM/issues/3
-    savePCDDirectory: "/home/liosamuser/LOAM/"  # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
+    savePCD: false                               # https://github.com/TixiaoShan/LIO-SAM/issues/3. Save upon close.
+    savePCDDirectory: "/home/liosamuser/LOAM/"   # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
 
     # Sensor Settings
     sensor: ouster                               # lidar sensor type, either 'velodyne', 'ouster' or 'livox'
@@ -37,7 +37,7 @@
     Horizon_SCAN: 1024                           # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
     downsampleRate: 2                            # default: 1. Downsample your data if too many. Only applied on LIDAR data (Up to ring LIDAR_N_SCAN)
     # points. i.e., 16 = 64 / 4, 16 = 16 / 1
-    lidarMinRange: 1.0                           # default: 1.0, minimum lidar range to be used
+    lidarMinRange: 1.5                           # default: 1.0, minimum lidar range to be used. 
     lidarMaxRange: 1000.0                        # default: 1000.0, maximum lidar range to be used
 
     # IMU Settings. Gathered from Allan Variance analysis
@@ -80,7 +80,7 @@
     mappingProcessInterval: 0.15                  # seconds, regulate mapping frequency
 
     # Surrounding map
-    surroundingkeyframeAddingDistThreshold: 0.01  # meters, regulate keyframe adding threshold
+    surroundingkeyframeAddingDistThreshold: 1.0  # meters, regulate keyframe adding threshold
     surroundingkeyframeAddingAngleThreshold: 0.05  # radians, regulate keyframe adding threshold
     surroundingKeyframeDensity: 1.0               # meters, downsample surrounding keyframe poses   
     surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization

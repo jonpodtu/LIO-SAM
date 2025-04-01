@@ -265,7 +265,7 @@ public:
                 *globalMapCloud += *globalCornerCloud;
                 *globalMapCloud += *globalSurfCloud;
                 *globalMapCloud += *globalSonarCloud;
-                int ret = pcl::io::savePCDFileASCII(saveMapDirectory + "/globalCloud.pcd", *globalMapCloud);
+                int ret = pcl::io::savePCDFileASCII(saveMapDirectory + "/cloudGlobal.pcd", *globalMapCloud);
                 res->success = ret == 0;
                 downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
                 downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
@@ -396,7 +396,9 @@ public:
         pcl::fromROSMsg(msgIn->cloud_sonar,  *sonarCloudLast); // Extract the new point cloud for sonar points
 
         // Accumulate sonar points
-        intermediateSonarClouds.push_back(sonarCloudLast);
+        pcl::PointCloud<PointType>::Ptr sonarCloudCopy(new pcl::PointCloud<PointType>());
+        pcl::copyPointCloud(*sonarCloudLast, *sonarCloudCopy);
+        intermediateSonarClouds.push_back(sonarCloudCopy);
         sonarTimestamps.push_back(timeLaserInfoCur);
 
         std::lock_guard<std::mutex> lock(mtx);
@@ -1856,27 +1858,31 @@ public:
             double startTime = sonarTimestamps.front();
             double endTime = sonarTimestamps.back();
 
-            for (size_t i = 0; i < intermediateSonarClouds.size(); ++i)
-            {
-                pcl::PointCloud<PointType>::Ptr cloud = intermediateSonarClouds[i];
-                double timestamp = sonarTimestamps[i];
-                float ratio = (timestamp - startTime) / (endTime - startTime);
-                if (ratio < 0 || ratio > 1)
+            if (startTime == endTime) {
+                RCLCPP_WARN(get_logger(), "Sonar timestamps are identical, copying the last sonar cloud.");
+                pcl::copyPointCloud(*sonarCloudLast, *sonarCloud); // Copy the last sonar cloud
+            } else {
+                for (size_t i = 0; i < intermediateSonarClouds.size(); ++i)
                 {
-                    RCLCPP_WARN(get_logger(), "Sonar scan timestamp out of range: %f", timestamp);
-                    continue;
+                    pcl::PointCloud<PointType>::Ptr cloud = intermediateSonarClouds[i];
+                    double timestamp = sonarTimestamps[i];
+                    float ratio = (timestamp - startTime) / (endTime - startTime);
+                    if (ratio < 0 || ratio > 1 || std::isnan(ratio))
+                    {
+                        RCLCPP_WARN(get_logger(), "Sonar scan timestamp out of range or invalid: %f", timestamp);
+                        continue;
+                    }
+                    // Print the ratio for debugging
+                    cout << "Ratio: " << ratio << endl;
+                    PointTypePose interpolatedPose = interpolatePose(relativeStartPose, Eigen::Affine3f::Identity(), ratio);
+
+                    // Transform the cloud using the interpolated pose
+                    pcl::PointCloud<PointType>::Ptr transformedCloud = transformPointCloud(cloud, &interpolatedPose);
+                    
+                    // Add the transformed points to the sonarCloud
+                    *sonarCloud += *transformedCloud;
                 }
-                // Print the ratio for debugging
-                cout << "Ratio: " << ratio << endl;
-                PointTypePose interpolatedPose = interpolatePose(relativeStartPose, Eigen::Affine3f::Identity(), ratio);
-
-                // Transform the cloud using the interpolated pose
-                pcl::PointCloud<PointType>::Ptr transformedCloud = transformPointCloud(cloud, &interpolatedPose);
-                
-                // Add the transformed points to the sonarCloud
-                *sonarCloud += *transformedCloud;
             }
-
         } else {
             pcl::copyPointCloud(*sonarCloudLast, *sonarCloud); // If there is only one pose, just copy the last scan
         }
